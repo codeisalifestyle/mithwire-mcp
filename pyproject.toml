@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nodriver-reforged-browser-mcp"
+version = "0.1.0"
+description = "MCP browser bridge that gives AI clients full access to a live browser environment."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "codeisalifestyle" }]
+dependencies = [
+  "mcp>=1.26.0,<2",
+  "nodriver-reforged",
+  "opencv-python>=4.8,<5",
+]
+
+[project.scripts]
+nodriver-reforged-browser-mcp = "nodriver_reforged_browser_mcp.server:main"
+
+[tool.uv.sources]
+nodriver-reforged = { workspace = true }
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["nodriver_reforged_browser_mcp*"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+  "E501",   # line length is enforced by the formatter, not the linter
+  "B008",   # FastMCP-style decorators use call-in-default patterns
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B", "E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

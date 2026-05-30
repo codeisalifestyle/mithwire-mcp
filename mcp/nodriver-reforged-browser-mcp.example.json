@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nodriver-reforged-browser-mcp": {
+      "command": "/absolute/path/to/nodriver-reforged-browser-mcp",
+      "args": ["--transport", "stdio"]
+    }
+  }
+}
