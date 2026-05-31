@@ -8,11 +8,14 @@ as a regression check after changing launch/stealth/proxy code.
 Sites:
   * deviceinfo   -> deviceandbrowserinfo.com (CDP/webdriver/headless/client-hints)
   * fingerprint  -> demo.fingerprint.com/playground (suspect score, bot, TZ mismatch)
+  * turnstile    -> seleniumbase.io/apps/turnstile (live Cloudflare Turnstile solve
+                    via Tab.verify_cf; asserts the #captcha-success indicator shows)
 
 Usage:
     python3 scripts/verify_mcp.py                      # headful, no proxy, all sites
     python3 scripts/verify_mcp.py --headless
     python3 scripts/verify_mcp.py --site deviceinfo
+    python3 scripts/verify_mcp.py --site turnstile     # live Cloudflare solve
     python3 scripts/verify_mcp.py --proxy "http://user:pass@host:port"
 
 Exit code 0 = all critical checks passed; 1 = at least one failed; 2 = harness error.
@@ -162,7 +165,48 @@ async def check_fingerprint(browser: BridgeBrowser, timeout: float, has_proxy: b
     return checks
 
 
-SITES = {"deviceinfo": check_deviceinfo, "fingerprint": check_fingerprint}
+TURNSTILE_URL = "https://seleniumbase.io/apps/turnstile"
+
+# The page flips #captcha-success from display:none to visible in its
+# onCaptchaSuccess callback, so that element's visibility is the authoritative
+# "challenge solved" signal -- independent of verify_cf's own return value.
+_SUCCESS_PROBE = (
+    "(() => { const s = document.querySelector('#captcha-success');"
+    " if (!s) return 'absent';"
+    " return getComputedStyle(s).display !== 'none' ? 'visible' : 'hidden'; })()"
+)
+
+
+async def check_turnstile(browser: BridgeBrowser, timeout: float) -> list[Check]:
+    await browser.goto(TURNSTILE_URL, wait_seconds=4.0)
+
+    # Exercise the exact reforged solver the MCP/engine ships. It runs its own
+    # template-match + click retry loop and returns True/False.
+    try:
+        solved = await browser.tab.verify_cf(timeout=timeout)
+    except Exception as exc:  # noqa: BLE001
+        return [Check("verify_cf raised", False, repr(exc))]
+
+    # Poll the page's own success indicator (authoritative for this site).
+    success = False
+    for _ in range(8):
+        state = await browser.tab.evaluate(_SUCCESS_PROBE)
+        if state == "visible":
+            success = True
+            break
+        await asyncio.sleep(1)
+
+    return [
+        Check("turnstile solved (#captcha-success visible)", success, "visible" if success else "not visible"),
+        Check("verify_cf return", bool(solved), str(solved), critical=False),
+    ]
+
+
+SITES = {
+    "deviceinfo": check_deviceinfo,
+    "fingerprint": check_fingerprint,
+    "turnstile": check_turnstile,
+}
 
 
 async def run(args) -> int:
@@ -181,6 +225,8 @@ async def run(args) -> int:
             print(f"\n=== {key} ===")
             if key == "fingerprint":
                 checks = await check_fingerprint(browser, args.timeout, proxy_config is not None)
+            elif key == "turnstile":
+                checks = await check_turnstile(browser, args.timeout)
             else:
                 checks = await check_deviceinfo(browser, args.timeout)
             all_checks[key] = checks
@@ -200,7 +246,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Stealth verification harness")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--proxy", default=None, help="proxy spec (see session_start)")
-    parser.add_argument("--site", default="all", choices=["all", "deviceinfo", "fingerprint"])
+    parser.add_argument("--site", default="all", choices=["all", "deviceinfo", "fingerprint", "turnstile"])
     parser.add_argument("--timeout", type=int, default=30, help="per-site capture timeout (s)")
     args = parser.parse_args()
     try:
