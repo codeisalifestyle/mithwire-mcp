@@ -1,3 +1,5 @@
+import asyncio
+import signal
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -47,58 +49,120 @@ class StartNoSandboxFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(browser.browser)
 
 
+class _FakeProc:
+    """Stand-in for the asyncio.subprocess.Process that uc.start returns."""
+
+    def __init__(self, *, exits_on_term: bool = True, already_exited: bool = False):
+        self.returncode = 0 if already_exited else None
+        self.terminate_calls = 0
+        self.kill_calls = 0
+        self._exits_on_term = exits_on_term
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+        if self._exits_on_term:
+            self.returncode = 0
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        while self.returncode is None:
+            await asyncio.sleep(0.02)
+        return self.returncode
+
+
 class TeardownIsolationTest(unittest.IsolatedAsyncioTestCase):
-    """close() must only ever stop/kill the process this wrapper spawned."""
+    """close() must tear down only the process this wrapper spawned, doing so
+    deterministically: await aclose(), SIGTERM, and SIGKILL only if wedged."""
 
-    async def test_owned_wedged_process_is_force_killed(self) -> None:
+    def _bridge_with(self, proc, pid: int = 4321):
         bridge = BridgeBrowser(headless=True)
         fake_browser = MagicMock()
-        fake_browser.stopped = None  # not callable -> short grace path, stays "not stopped"
-        bridge.browser = fake_browser
+        fake_browser._process = proc
+        fake_browser._process_pid = pid
+        fake_browser._aclosed = False
 
-        killed: list[bool] = []
-        bridge._force_kill_process = lambda: killed.append(True)  # type: ignore[assignment]
+        async def _aclose():
+            fake_browser._aclosed = True
+
+        fake_browser.aclose = _aclose
+        bridge.browser = fake_browser
+        return bridge, fake_browser
+
+    async def test_clean_sigterm_exit_does_not_escalate(self) -> None:
+        proc = _FakeProc(exits_on_term=True)
+        bridge, fake_browser = self._bridge_with(proc)
 
         await bridge.close()
 
-        fake_browser.stop.assert_called_once()
-        self.assertEqual(killed, [True], "a wedged owned process must be force-killed")
+        self.assertTrue(fake_browser._aclosed, "aclose() must be awaited during teardown")
+        self.assertEqual(proc.terminate_calls, 1)
+        self.assertEqual(proc.kill_calls, 0, "a clean SIGTERM exit must not be SIGKILLed")
+        self.assertIsNone(bridge.browser)
 
-    async def test_owned_clean_stop_does_not_force_kill(self) -> None:
+    async def test_wedged_process_escalates_to_sigkill(self) -> None:
+        proc = _FakeProc(exits_on_term=False)
+        bridge, _ = self._bridge_with(proc)
+
+        await bridge._terminate_process(proc, 4321, term_timeout=0.1, kill_timeout=0.5)
+
+        self.assertEqual(proc.terminate_calls, 1)
+        self.assertEqual(proc.kill_calls, 1, "a wedged process must be escalated to SIGKILL")
+
+    async def test_already_exited_process_is_noop(self) -> None:
+        proc = _FakeProc(already_exited=True)
+        bridge, _ = self._bridge_with(proc)
+
+        await bridge._terminate_process(proc, 4321)
+
+        self.assertEqual(proc.terminate_calls, 0)
+        self.assertEqual(proc.kill_calls, 0)
+
+
+class KillPidFallbackTest(unittest.IsolatedAsyncioTestCase):
+    """With no live process handle, teardown falls back to the recorded PID and
+    must escalate SIGTERM -> SIGKILL without touching anything else."""
+
+    async def test_terminate_without_proc_uses_pid(self) -> None:
         bridge = BridgeBrowser(headless=True)
-        fake_browser = MagicMock()
-        fake_browser.stopped = MagicMock(return_value=True)  # reports stopped immediately
-        bridge.browser = fake_browser
+        seen: list[int] = []
 
-        killed: list[bool] = []
-        bridge._force_kill_process = lambda: killed.append(True)  # type: ignore[assignment]
+        async def fake_kill_pid(pid):
+            seen.append(pid)
 
-        await bridge.close()
+        bridge._kill_pid = fake_kill_pid  # type: ignore[assignment]
+        await bridge._terminate_process(None, 7777)
+        self.assertEqual(seen, [7777], "no proc handle must fall back to the recorded pid")
 
-        fake_browser.stop.assert_called_once()
-        self.assertEqual(killed, [], "a cleanly stopped process must not be force-killed")
-
-
-class ForceKillScopeTest(unittest.TestCase):
-    """_force_kill_process must target only the spawned subprocess handle/pid."""
-
-    def test_force_kill_uses_only_the_owned_process_handle(self) -> None:
+    async def test_kill_pid_stops_after_sigterm_exit(self) -> None:
         bridge = BridgeBrowser(headless=True)
-        fake_proc = MagicMock()
-        fake_browser = MagicMock()
-        fake_browser._process = fake_proc
-        # Force the pid fallback to be unmistakably unused by giving a handle.
-        bridge.browser = fake_browser
+        alive = {"v": True}
+        signals: list[int] = []
 
-        bridge._force_kill_process()
+        def fake_kill(pid, sig):
+            if sig == 0:
+                if not alive["v"]:
+                    raise ProcessLookupError()
+                return
+            signals.append(sig)
+            if sig in (getattr(signal, "SIGTERM", 15), 15):
+                alive["v"] = False  # exits on SIGTERM
 
-        fake_proc.kill.assert_called_once()
+        with patch("os.kill", side_effect=fake_kill):
+            await bridge._kill_pid(9999)
 
-    def test_force_kill_noop_without_browser(self) -> None:
+        self.assertIn(getattr(signal, "SIGTERM", 15), signals)
+        self.assertNotIn(
+            getattr(signal, "SIGKILL", 9), signals,
+            "a process that exits on SIGTERM must not be SIGKILLed",
+        )
+
+    async def test_noop_without_browser(self) -> None:
         bridge = BridgeBrowser(headless=True)
         bridge.browser = None
-        # Must not raise.
-        bridge._force_kill_process()
+        await bridge.close()  # must not raise
 
 
 if __name__ == "__main__":

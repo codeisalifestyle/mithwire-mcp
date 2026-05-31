@@ -159,28 +159,21 @@ class BridgeBrowser:
     async def close(self) -> None:
         if self.browser is None:
             return
+        browser = self.browser
+        # We own this process, so tear it down deterministically here rather than
+        # via Browser.stop(). Browser.stop() schedules aclose() as a fire-and-forget
+        # task (which surfaces "Event loop is closed" when the loop later tears
+        # down) and only sends SIGTERM, so a slow Chrome shutdown tripped our
+        # force-kill fallback on every close. Awaiting aclose() + process.wait()
+        # is clean and only escalates to SIGKILL for a genuinely wedged process.
+        proc = getattr(browser, "_process", None)
+        pid = getattr(browser, "_process_pid", None)
         try:
             try:
-                self.browser.stop()
-            except Exception as exc:
-                logger.warning("Browser.stop() raised: %s", exc)
-            stopped_marker = getattr(self.browser, "stopped", None)
-            stopped = False
-            if callable(stopped_marker):
-                for _ in range(20):
-                    try:
-                        if bool(stopped_marker()):
-                            stopped = True
-                            break
-                    except Exception:
-                        break
-                    await asyncio.sleep(0.1)
-            else:
-                await asyncio.sleep(0.5)
-            if not stopped:
-                # Browser.stop() did not terminate the process within the
-                # grace window; force-kill so we never leak a wedged process.
-                self._force_kill_process()
+                await asyncio.wait_for(browser.aclose(), timeout=2.0)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("browser.aclose() during teardown failed: %s", exc)
+            await self._terminate_process(proc, pid)
         finally:
             self.browser = None
             self.tab = None
@@ -278,32 +271,68 @@ class BridgeBrowser:
         self._proxy_fetch_enabled = True
         logger.info("Enabled proxy auth challenge handler for %s", proxy.redacted())
 
-    def _force_kill_process(self) -> None:
-        """Best-effort SIGKILL of the underlying browser process.
+    async def _terminate_process(
+        self,
+        proc: Any,
+        pid: Any,
+        *,
+        term_timeout: float = 3.0,
+        kill_timeout: float = 2.0,
+    ) -> None:
+        """Deterministically stop the browser process we launched.
 
-        ``Browser.stop()`` is cooperative; if the process is wedged it can
-        outlive the call and leak. We try the process handle first, then fall
-        back to the recorded PID.
+        ``proc`` is the ``asyncio.subprocess.Process`` from ``uc.start``. Awaiting
+        ``proc.wait()`` both reaps the child (so there is no zombie or
+        ``BaseSubprocessTransport.__del__`` "Event loop is closed" noise) and is
+        the authoritative exit signal, so SIGKILL is only used for a process that
+        actually refuses to exit. Falls back to the recorded PID if no live
+        process handle is available.
         """
-        browser = self.browser
-        if browser is None:
-            return
-        process = getattr(browser, "_process", None) or getattr(browser, "process", None)
-        try:
-            if process is not None and hasattr(process, "kill"):
-                process.kill()
-                logger.warning("Force-killed wedged browser process.")
-                return
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("browser process.kill() failed: %s", exc)
-        pid = getattr(browser, "_process_pid", None)
-        if isinstance(pid, int) and pid > 0:
-            kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+        if proc is not None and getattr(proc, "returncode", None) is None:
             try:
-                os.kill(pid, kill_signal)
-                logger.warning("Force-killed wedged browser pid %s.", pid)
-            except (OSError, ProcessLookupError) as exc:
-                logger.debug("os.kill(%s) failed: %s", pid, exc)
+                proc.terminate()
+            except ProcessLookupError:
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("process.terminate() failed: %s", exc)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=term_timeout)
+                return
+            except asyncio.TimeoutError:
+                logger.warning("browser ignored SIGTERM; escalating to SIGKILL")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("awaiting browser exit failed: %s", exc)
+            try:
+                proc.kill()
+                await asyncio.wait_for(proc.wait(), timeout=kill_timeout)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("process.kill() failed: %s", exc)
+            return
+        if proc is not None:
+            # Already exited (returncode set); nothing to do.
+            return
+        await self._kill_pid(pid)
+
+    async def _kill_pid(self, pid: Any) -> None:
+        """Best-effort SIGTERM->SIGKILL of a bare PID (no asyncio handle)."""
+        if not isinstance(pid, int) or pid <= 0:
+            return
+        for sig, grace in (
+            (getattr(signal, "SIGTERM", 15), 3.0),
+            (getattr(signal, "SIGKILL", 9), 1.0),
+        ):
+            try:
+                os.kill(pid, sig)
+            except (OSError, ProcessLookupError):
+                return  # already gone
+            deadline = grace
+            while deadline > 0:
+                await asyncio.sleep(0.1)
+                deadline -= 0.1
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    return  # exited
 
     async def _inject_stealth_script(self) -> None:
         script = """
