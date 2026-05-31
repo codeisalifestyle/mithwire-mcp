@@ -4,7 +4,7 @@
 
 1. `nodriver_reforged_browser_mcp/browser.py`
    - Nodriver adapter.
-   - Launch mode (owns browser process) and attach mode (connect to existing debugger endpoint).
+   - Always launches and owns a fresh browser process (no attach); supports headless and first-class proxy (incl. authenticated HTTP/HTTPS via CDP `Fetch`).
 
 2. `nodriver_reforged_browser_mcp/actions.py`
    - Stateless action primitives:
@@ -14,9 +14,9 @@
 
 3. `nodriver_reforged_browser_mcp/runtime.py`
    - Session lifecycle and state:
-     - start, attach, list, get, stop
+     - start, list, get, stop, stop_all
    - Per-session action locking.
-   - Connection resolution from host/port, ws URL, or state file.
+   - Resolves launch settings (defaults -> launch config -> profile overrides -> explicit args).
 
 4. `nodriver_reforged_browser_mcp/server.py`
    - FastMCP tool surface for MCP clients.
@@ -24,8 +24,8 @@
 
 5. `nodriver_reforged_browser_mcp/state_store.py`
    - Centralized user-level storage for browser launch state.
-   - Manages reusable profile directories, cookie jars, and launch configs.
-   - Resolves saved defaults for `session_start` (profile/cookie/config aware launch).
+   - Manages reusable profile directories and launch configs (profiles persist cookies natively).
+   - Resolves saved defaults for `session_start` (profile/config aware launch).
 
 ## Capability highlights
 

@@ -1,4 +1,4 @@
-"""MCP server exposing nodriver-based browser bridge tools."""
+"""MCP server exposing nodriver-reforged browser automation tools."""
 
 from __future__ import annotations
 
@@ -94,9 +94,10 @@ def create_server(
     mcp = FastMCP(
         name=SERVER_NAME,
         instructions=(
-            "Bridge MCP server for stealthed nodriver browser automation. "
-            "Launch or attach browser sessions and use browser_* tools to inspect DOM state, "
-            "navigate, click, type, scroll, capture console/network metadata, and take screenshots."
+            "Stealth nodriver-reforged browser MCP server. "
+            "Launch fresh browser sessions (ephemeral by default, or a persistent managed "
+            "profile) and use browser_* tools to inspect DOM state, navigate, click, type, "
+            "scroll, capture console/network metadata, and take screenshots."
         ),
         host=host,
         port=port,
@@ -107,103 +108,41 @@ def create_server(
     @mcp.tool(
         name="session_start",
         description=(
-            "Launch a new browser process. Always spawns a fresh executable; never "
-            "attaches to a running browser. When given an external user_data_dir "
-            "(for example the user's real Chrome/Brave profile), it auto-clones it "
-            "into an ephemeral directory using clone_strategy (default 'auth_only') "
-            "so the source browser is not disrupted."
+            "Launch a new, isolated browser. By default it is ephemeral (no saved "
+            "state) and headful. Pass profile=<name> to launch a persistent managed "
+            "profile whose cookies/storage survive across runs. Optional: headless, "
+            "proxy, start_url, cookie_file (one-shot cookie injection), launch_config. "
+            "proxy accepts 'http://host:port', 'http://user:pass@host:port', the "
+            "provider 'scheme:host:port:user:pass' form, or socks5://host:port "
+            "(authenticated SOCKS not wired yet; use the HTTP endpoint). When a proxy "
+            "is set, the browser timezone is auto-aligned to the proxy's egress IP."
         ),
     )
     async def session_start(
         session_id: str | None = None,
         headless: bool | None = None,
         start_url: str | None = None,
-        user_data_dir: str | None = None,
         browser_args: list[str] | None = None,
         browser_executable_path: str | None = None,
         sandbox: bool | None = None,
         cookie_file: str | None = None,
         cookie_fallback_domain: str | None = None,
         profile: str | None = None,
-        cookie_name: str | None = None,
         launch_config: str | None = None,
-        duplicate_user_data_dir: bool | None = None,
-        profile_directory: str | None = None,
-        clone_strategy: Literal["auth_only", "cow", "full"] | None = None,
+        proxy: str | None = None,
     ) -> dict[str, Any]:
         return await manager.start_session(
             session_id=session_id,
             headless=headless,
             start_url=start_url,
-            user_data_dir=user_data_dir,
             browser_args=browser_args,
             browser_executable_path=browser_executable_path,
             sandbox=sandbox,
             cookie_file=cookie_file,
             cookie_fallback_domain=cookie_fallback_domain,
             profile=profile,
-            cookie_name=cookie_name,
             launch_config=launch_config,
-            duplicate_user_data_dir=duplicate_user_data_dir,
-            profile_directory=profile_directory,
-            clone_strategy=clone_strategy,
-        )
-
-    @mcp.tool(
-        name="session_attach",
-        description=(
-            "Attach to existing browser via host/port, ws_url, or state_file. "
-            "Defaults to opening a fresh tab so the user's existing tabs are NOT hijacked. "
-            "Pass new_tab=false to drive the existing main tab instead."
-        ),
-    )
-    async def session_attach(
-        session_id: str | None = None,
-        host: str | None = None,
-        port: int | None = None,
-        ws_url: str | None = None,
-        state_file: str | None = None,
-        start_url: str | None = None,
-        new_tab: bool | None = None,
-    ) -> dict[str, Any]:
-        return await manager.attach_session(
-            session_id=session_id,
-            host=host,
-            port=port,
-            ws_url=ws_url,
-            state_file=state_file,
-            start_url=start_url,
-            new_tab=new_tab,
-        )
-
-    @mcp.tool(
-        name="session_launch_modes",
-        description=(
-            "Return a structured catalog of supported browser launching/attaching recipes. "
-            "Call this BEFORE session_start or session_attach to pick the correct mode."
-        ),
-    )
-    async def session_launch_modes() -> dict[str, Any]:
-        return await manager.launch_modes()
-
-    @mcp.tool(
-        name="session_preflight",
-        description=(
-            "Run environment checks (state root, detected browsers, nodriver import, optional "
-            "DevTools endpoint probe and user_data_dir validation). Use to debug launch failures."
-        ),
-    )
-    async def session_preflight(
-        host: str | None = None,
-        port: int | None = None,
-        browser_executable_path: str | None = None,
-        user_data_dir: str | None = None,
-    ) -> dict[str, Any]:
-        return await manager.preflight(
-            host=host,
-            port=port,
-            browser_executable_path=browser_executable_path,
-            user_data_dir=user_data_dir,
+            proxy=proxy,
         )
 
     @mcp.tool(name="session_list", description="List active browser sessions.")
@@ -236,7 +175,6 @@ def create_server(
         profile: str,
         description: str | None = None,
         account_aliases: list[str] | None = None,
-        cookie_name: str | None = None,
         launch_config: str | None = None,
         launch_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -244,7 +182,6 @@ def create_server(
             profile=profile,
             description=description,
             account_aliases=account_aliases,
-            cookie_name=cookie_name,
             launch_config=launch_config,
             launch_overrides=launch_overrides,
         )
@@ -285,10 +222,6 @@ def create_server(
     @mcp.tool(name="session_launch_config_delete", description="Delete a launch config by name.")
     async def session_launch_config_delete(config_name: str) -> dict[str, Any]:
         return await manager.delete_launch_config(config_name=config_name)
-
-    @mcp.tool(name="session_cookie_jar_list", description="List centralized cookie jar files.")
-    async def session_cookie_jar_list() -> dict[str, Any]:
-        return await manager.list_cookie_jars()
 
     @mcp.tool(name="session_set_policy", description="Set runtime policy for one session.")
     async def session_set_policy(
@@ -1196,7 +1129,7 @@ def create_server(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nodriver-reforged-browser-mcp",
-        description="Stealth browser bridge MCP server for nodriver sessions.",
+        description="Stealth nodriver-reforged browser MCP server.",
     )
     parser.add_argument(
         "--transport",

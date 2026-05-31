@@ -2,7 +2,7 @@
 
 🚀 MCP server that gives AI clients full access to a live Chromium browser environment.
 
-Your AI client can intelligently create a new browser session or attach to an existing system Chromium instance. It is built for autonomous automation, developer workflows, and production-style browser operations, powered by `nodriver-reforged`.
+Your AI client launches fresh, isolated browser sessions — ephemeral by default, or backed by a persistent managed profile when you need a durable logged-in identity. It is built for autonomous automation, developer workflows, and production-style browser operations, powered by `nodriver-reforged`.
 
 ## Demo Video
 
@@ -14,10 +14,10 @@ Your AI client can intelligently create a new browser session or attach to an ex
 
 ### 🧠 Intelligent Chromium orchestration
 
-- Launch fresh sessions instantly with `session_start`, or attach to existing system Chromium instances with `session_attach`.
-- Connect the way your environment requires: host/port, websocket URL, or saved state file.
+- Launch fresh sessions instantly with `session_start` — always a brand-new, isolated browser process.
+- One simple choice: ephemeral (default) or a persistent managed `profile`. No flaky attach/clone paths to reason about.
 - Run with confidence using robust session lifecycle controls (`start`, `list`, `get`, `stop`, `stop_all`) and per-session action locking.
-- Keep long-running workflows alive by reconnecting and continuing work instead of restarting from zero.
+- Stay out of the user's way: the MCP never touches, attaches to, or tears down a browser it didn't spawn.
 
 ### 🤖 Built for autonomous agents and fast-moving teams
 
@@ -28,9 +28,9 @@ Your AI client can intelligently create a new browser session or attach to an ex
 
 ### 👤 Durable browser identity and session state
 
-- Centralize reusable browser state under one roof: `profiles/`, `cookies/`, and `configs/`.
-- Start sessions with profile-aware defaults, account aliases, and cookie jars built in.
-- Fine-tune launch behavior with configurable browser flags, executable paths, headless/sandbox settings, and proxy-ready arguments.
+- Centralize reusable browser state under one roof: `profiles/` and `configs/`.
+- A managed `profile` persists its own cookies and storage natively across runs — no separate cookie bookkeeping required.
+- Fine-tune launch behavior with configurable browser flags, executable paths, headless/sandbox settings, and first-class proxy support (incl. authenticated HTTP/HTTPS proxies).
 - Preserve realistic, persistent browser identity across sessions for multi-account and high-continuity automation.
 
 ### 🕵️ Stealth foundation with nodriver-reforged + CDP
@@ -137,61 +137,69 @@ After reloading/restarting your AI client, ask it:
 
 If these succeed, installation is complete.
 
-## Choosing a launch mode
+## Launching a session
 
-`nodriver-reforged-browser-mcp` exposes six well-defined launch recipes. Always pick one
-explicitly before calling `session_start` or `session_attach`. The MCP itself
-returns the same catalog at runtime via `session_launch_modes`.
+The MCP **always spawns a brand-new, isolated browser process**. It never
+attaches to, takes over, or shuts down a browser it didn't launch. There are no
+"modes" to memorize — `session_start` has exactly two shapes:
 
-The MCP **always spawns a brand-new browser process**. It never attaches to or
-takes over the user's currently running browser. When given an external
-`user_data_dir`, the runtime first clones the auth-critical files into an
-ephemeral location using `clone_strategy` (default `auth_only`), so the user's
-live browser is never touched.
+| Goal | Call | What you get |
+| --- | --- | --- |
+| Throwaway browser (default) | `{}` | A fresh ephemeral browser with no saved state. Ideal for scraping and E2E. |
+| Persistent identity | `{ "profile": "twitter_main" }` | A managed profile whose cookies/storage persist across runs. |
 
-| Mode | Tool | When to use | Example args |
-| --- | --- | --- | --- |
-| `ephemeral_fresh` | `session_start` | Fresh isolated browser, no identity. Default for scraping/E2E. | `{}` |
-| `headless_scrape` | `session_start` | Background scraping in CI / no UI. | `{ "headless": true }` |
-| `managed_profile` | `session_start` | Reusable persistent identity stored in the state root. | `{ "profile": "twitter_main" }` |
-| `live_profile_clone` | `session_start` | Spawn a NEW browser with the user's REAL logged-in identity. Auto-clones any external `user_data_dir`. Default `clone_strategy=auth_only` is sub-second and cross-platform. | `{ "user_data_dir": "~/Library/Application Support/Google/Chrome", "browser_executable_path": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" }` |
-| `attach_existing_with_new_tab` | `session_attach` | Advanced. The user manually launched a browser with `--remote-debugging-port`. | `{ "host": "127.0.0.1", "port": 9222 }` |
-| `attach_existing_take_over` | `session_attach` | Advanced. Explicitly drive the user's foreground tab. | `{ "host": "127.0.0.1", "port": 9222, "new_tab": false }` |
+Everything else is an optional flag layered on top of those two:
 
-### `clone_strategy` for `live_profile_clone`
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `headless` | `false` (headful) | Run without a visible window (e.g. CI). |
+| `proxy` | none | Route traffic through an upstream proxy (see below). |
+| `start_url` | none | Navigate here right after launch. |
+| `cookie_file` | none | One-shot injection of cookies from a JSON file at launch. |
+| `sandbox` | `true` | Keep Chromium's sandbox on (recommended; `--no-sandbox` is easily bot-detected). |
+| `launch_config` | `default` | Apply a saved set of launch settings. |
 
-| Strategy | Platform | Cost | Fidelity | Notes |
-| --- | --- | --- | --- | --- |
-| `auth_only` (default) | macOS / Windows / Linux | sub-second, tens of MB | Cookies, Login Data, Preferences. No extensions/history. | Uses SQLite online backup, so it's safe even when the source browser is open. Recommended for almost all flows. |
-| `cow` | macOS only (APFS) | near-instant, near-zero disk | Full profile incl. extensions | Uses `cp -Rc` (copy-on-write clonefile). Falls back to `auth_only` on non-Darwin or non-APFS volumes. |
-| `full` | All | slow (GBs) | Full profile | Legacy `shutil.copytree`. Escape hatch only. |
+### Proxy support
 
-Common gotchas avoided by these recipes:
+`proxy` accepts several common spellings and normalizes them:
 
-- Multi-GB profile copies on every session start — fixed: `auth_only` is now the default `clone_strategy`, copying only the small files needed for authentication.
-- Source browser locking the cookie SQLite while we read it — fixed: `auth_only` uses SQLite's online backup API, which co-exists safely with the running browser.
-- Stale `SingletonLock` carried over from a CoW clone causing "profile in use" — fixed: cloned profiles have `SingletonLock`, `SingletonCookie`, and `SingletonSocket` stripped before launch.
-- Multiple windows opening when launching with `--profile-directory` but no `user_data_dir` — fixed: the flag is now only appended when an explicit `user_data_dir` is in play.
-- The MCP "hijacking" the user's foreground tab on attach — fixed: `session_attach` defaults to opening a fresh blank tab. Pass `new_tab=false` only when you want the legacy take-over behavior.
-- `browser_cookies_set` mid-session navigating the page to `about:blank` — fixed: the helper no longer navigates by default. Cookie application during initial session startup still navigates first to ensure the page state is clean.
-- Lingering Chromium processes after `session_stop` — fixed: the close path now waits on `browser.stopped()` and unconditionally cleans up any ephemeral cloned `user_data_dir`.
+- `http://host:port` or `http://user:pass@host:port`
+- the provider `scheme:host:port:user:pass` form
+- `socks5://host:port`
 
-Use `session_preflight` to debug failures before opening a session:
+Authenticated **HTTP/HTTPS** proxies are fully supported — credentials are
+answered at runtime over CDP's `Fetch.authRequired` flow. Chromium's
+`--proxy-server` (how this MCP wires every proxy) **cannot** authenticate SOCKS
+proxies; nodriver can via per-context `create_context`, but that path is not
+wired into this launch flow yet, so an authenticated SOCKS spec is rejected up
+front — use the provider's HTTP/HTTPS endpoint instead.
 
-```jsonc
-// AI client invocation
-{
-  "tool": "session_preflight",
-  "arguments": {
-    "host": "127.0.0.1",
-    "port": 9222,
-    "browser_executable_path": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "user_data_dir": "~/Library/Application Support/Google/Chrome"
-  }
-}
+**Timezone alignment.** When a proxy is set, the session's JavaScript timezone is
+auto-aligned to the proxy's egress IP: the browser queries `api.ipapi.is` through
+the proxy and applies the result via CDP `Emulation.setTimezoneOverride` before
+the first real navigation. This removes the browser-vs-IP timezone mismatch that
+fingerprinting services flag as a bot signal. The detected egress (ip, timezone,
+city, country) is recorded in the session metadata under `proxy_exit`.
+
+### Verifying stealth
+
+`scripts/verify_mcp.py` launches a real session (the same `BridgeBrowser` path the
+MCP uses) against public bot-detection services and asserts the critical signals
+are clean — useful as a regression check after touching launch/stealth/proxy code:
+
+```bash
+python3 scripts/verify_mcp.py --headless                 # deviceinfo + fingerprint
+python3 scripts/verify_mcp.py --site deviceinfo
+python3 scripts/verify_mcp.py --proxy "http://user:pass@host:port"  # also checks TZ alignment
 ```
 
-It returns: detected Chromium binaries on the host, whether `nodriver` imports cleanly, whether the optional DevTools endpoint is reachable, and whether the optional `user_data_dir` exists / looks locked by another browser.
+### Cookies
+
+A managed `profile` stores its cookies in Chromium's native cookie store, so
+they persist automatically — there is nothing extra to manage. The only
+separate cookie operations are **injection** (`cookie_file` at launch, or
+`browser_cookies_set` at runtime) and **export** (`browser_cookies_get` /
+`browser_cookies_save`).
 
 ## Centralized browser state store
 
@@ -204,10 +212,9 @@ It returns: detected Chromium binaries on the host, whether `nodriver` imports c
 Within that root:
 
 - `profiles/` stores persistent Chromium profile directories (user data dirs)
-- `cookies/` stores reusable cookie jar JSON files
 - `configs/` stores launch configs used by `session_start`
 
-`session_start` supports optional `profile`, `cookie_name`, and `launch_config` inputs.
+`session_start` supports optional `profile` and `launch_config` inputs.
 It resolves launch settings in this order:
 
 1. Built-in defaults
@@ -249,9 +256,6 @@ Client config for this mode:
 ### Session lifecycle
 
 - `session_start`
-- `session_attach`
-- `session_launch_modes`
-- `session_preflight`
 - `session_list`
 - `session_get`
 - `session_state_paths`
@@ -263,7 +267,6 @@ Client config for this mode:
 - `session_launch_config_get`
 - `session_launch_config_set`
 - `session_launch_config_delete`
-- `session_cookie_jar_list`
 - `session_set_policy`
 - `session_get_policy`
 - `session_set_download_dir`
@@ -321,10 +324,6 @@ Client config for this mode:
 ## Project docs
 
 - Architecture: `docs/architecture.md`
-
-## SKILL FILE
-
-- Skill: `skills/nodriver-reforged-browser-mcp-usage/SKILL.md`
 
 ## Troubleshooting
 

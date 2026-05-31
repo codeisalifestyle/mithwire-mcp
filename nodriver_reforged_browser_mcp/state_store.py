@@ -67,7 +67,7 @@ LAUNCH_OPTION_KEYS = (
     "cookie_file",
     "cookie_fallback_domain",
     "profile",
-    "cookie_name",
+    "proxy",
 )
 
 _BOOL_LAUNCH_KEYS = {"headless", "sandbox"}
@@ -85,7 +85,7 @@ BUILTIN_LAUNCH_DEFAULTS: dict[str, Any] = {
     "cookie_file": None,
     "cookie_fallback_domain": None,
     "profile": None,
-    "cookie_name": None,
+    "proxy": None,
 }
 
 
@@ -275,33 +275,6 @@ class BrowserStateStore:
             "deleted": existed,
         }
 
-    def cookie_jar_path(self, cookie_name: str) -> Path:
-        normalized = validate_name(cookie_name, label="cookie jar name")
-        return self.cookies_dir / f"{normalized}.json"
-
-    def list_cookie_jars(self) -> list[dict[str, Any]]:
-        jars: list[dict[str, Any]] = []
-        for path in sorted(self.cookies_dir.glob("*.json")):
-            count = 0
-            read_error: str | None = None
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                rows = data.get("cookies") if isinstance(data, dict) else data
-                if isinstance(rows, list):
-                    count = len([row for row in rows if isinstance(row, dict)])
-            except Exception as exc:  # noqa: BLE001
-                read_error = str(exc)
-            row: dict[str, Any] = {
-                "name": path.stem,
-                "path": str(path),
-                "size_bytes": path.stat().st_size,
-                "cookie_count": count,
-            }
-            if read_error:
-                row["read_error"] = read_error
-            jars.append(row)
-        return jars
-
     def profile_dir(self, profile_name: str, *, create: bool = False) -> Path:
         normalized = validate_name(profile_name, label="profile name")
         path = self.profiles_dir / normalized
@@ -336,12 +309,6 @@ class BrowserStateStore:
         description = str(description_raw).strip() if description_raw is not None else None
         aliases = self._normalize_aliases(raw_metadata.get("account_aliases"))
 
-        cookie_name_raw = raw_metadata.get("cookie_name")
-        cookie_name = (
-            validate_name(str(cookie_name_raw).strip(), label="cookie jar name")
-            if isinstance(cookie_name_raw, str) and cookie_name_raw.strip()
-            else None
-        )
         launch_config_raw = raw_metadata.get("launch_config")
         launch_config = (
             validate_name(str(launch_config_raw).strip(), label="launch config name")
@@ -359,16 +326,11 @@ class BrowserStateStore:
             "exists": directory.exists(),
             "description": description,
             "account_aliases": aliases,
-            "cookie_name": cookie_name,
             "launch_config": launch_config,
             "launch_overrides": launch_overrides,
             "created_at": created_at,
             "updated_at": updated_at,
         }
-        if cookie_name:
-            cookie_path = self.cookie_jar_path(cookie_name)
-            payload["cookie_path"] = str(cookie_path)
-            payload["cookie_exists"] = cookie_path.exists()
         return payload
 
     def list_profiles(self) -> list[dict[str, Any]]:
@@ -408,7 +370,6 @@ class BrowserStateStore:
         profile_name: str,
         description: str | None = None,
         account_aliases: list[str] | None = None,
-        cookie_name: str | None = None,
         launch_config: str | None = None,
         launch_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -426,14 +387,6 @@ class BrowserStateStore:
 
         if account_aliases is not None:
             metadata["account_aliases"] = self._normalize_aliases(account_aliases)
-
-        if cookie_name is not None:
-            cleaned_cookie_name = str(cookie_name).strip()
-            metadata["cookie_name"] = (
-                validate_name(cleaned_cookie_name, label="cookie jar name")
-                if cleaned_cookie_name
-                else None
-            )
 
         if launch_config is not None:
             cleaned_launch_config = str(launch_config).strip()

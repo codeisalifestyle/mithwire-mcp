@@ -3,29 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-import atexit
 import hashlib
 import json
 import logging
-import os
-import shutil
-import sqlite3
-import subprocess
-import sys
 import tempfile
-import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 from . import actions as action_ops
 from .actions import ensure_observers, get_url_and_title
 from .browser import BridgeBrowser
 from .cookies import load_cookie_file
+from .proxy import parse_proxy
 from .state_store import (
     DEFAULT_LAUNCH_CONFIG_NAME,
     BrowserStateStore,
@@ -37,530 +31,6 @@ from .state_store import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# --- Ephemeral profile-clone tracking -------------------------------------
-# The auth_only/cow/full clone strategies copy credential stores (Cookies,
-# Login Data) into temp directories. Track every clone we create so it can be
-# reclaimed on session stop, on interpreter exit (atexit), and via a
-# conservative startup sweep. Without this, a launch failure or a crash leaves
-# decrypted-on-launch credential material on disk indefinitely.
-_EPHEMERAL_CLONE_PREFIXES = (
-    "bbmcp-auth-clone-",
-    "bbmcp-cow-clone-",
-    "bbmcp-profile-clone-",
-)
-_STALE_CLONE_MAX_AGE_SECONDS = 12 * 3600
-_TRACKED_EPHEMERAL_DIRS: set[str] = set()
-_STARTUP_SWEEP_DONE = False
-
-
-def _track_ephemeral_dir(path: str | Path | None) -> None:
-    if path:
-        _TRACKED_EPHEMERAL_DIRS.add(str(path))
-
-
-def _purge_ephemeral_dir(path: str | Path | None) -> bool:
-    if not path:
-        return False
-    target = Path(str(path)).expanduser()
-    removed = False
-    try:
-        if target.exists():
-            shutil.rmtree(target, ignore_errors=True)
-            removed = not target.exists()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to remove ephemeral clone %s: %s", target, exc)
-    _TRACKED_EPHEMERAL_DIRS.discard(str(path))
-    _TRACKED_EPHEMERAL_DIRS.discard(str(target))
-    if removed:
-        logger.debug("Removed ephemeral clone %s", target)
-    return removed
-
-
-@atexit.register
-def _cleanup_tracked_ephemeral_dirs() -> None:
-    for path in list(_TRACKED_EPHEMERAL_DIRS):
-        _purge_ephemeral_dir(path)
-
-
-def sweep_stale_ephemeral_clones(
-    max_age_seconds: float = _STALE_CLONE_MAX_AGE_SECONDS,
-) -> list[str]:
-    """Best-effort removal of orphaned clone dirs left behind by crashed runs.
-
-    Only touches temp dirs this tool created (``bbmcp-*-clone-*``) that are
-    older than ``max_age_seconds`` so a clone a concurrently running instance
-    is still using is never deleted.
-    """
-    removed: list[str] = []
-    temp_root = Path(tempfile.gettempdir())
-    now = time.time()
-    try:
-        candidates = list(temp_root.iterdir())
-    except OSError:
-        return removed
-    for entry in candidates:
-        try:
-            if not entry.is_dir():
-                continue
-            if not any(entry.name.startswith(p) for p in _EPHEMERAL_CLONE_PREFIXES):
-                continue
-            if (now - entry.stat().st_mtime) < max_age_seconds:
-                continue
-        except OSError:
-            continue
-        if _purge_ephemeral_dir(entry):
-            removed.append(str(entry))
-    if removed:
-        logger.info("Swept %d stale ephemeral clone dir(s).", len(removed))
-    return removed
-
-
-LAUNCH_MODES: list[dict[str, Any]] = [
-    {
-        "id": "ephemeral_fresh",
-        "tool": "session_start",
-        "summary": "Brand-new isolated Chromium window with no profile state.",
-        "when_to_use": (
-            "Default for deterministic automation, scraping, e2e tests, and any "
-            "task that does NOT need a logged-in account. Safe even when your "
-            "real Chrome/Brave is open."
-        ),
-        "required_args": [],
-        "optional_args": ["headless", "start_url", "browser_args", "sandbox"],
-        "example": {
-            "tool": "session_start",
-            "args": {"headless": False, "start_url": "https://example.com"},
-        },
-        "warnings": [],
-    },
-    {
-        "id": "headless_scrape",
-        "tool": "session_start",
-        "summary": "Ephemeral Chromium in headless mode for background scraping.",
-        "when_to_use": "Server-side scraping, CI/CD, anything without a visible window.",
-        "required_args": ["headless=true"],
-        "optional_args": ["start_url", "browser_args", "sandbox"],
-        "example": {
-            "tool": "session_start",
-            "args": {"headless": True, "start_url": "https://example.com"},
-        },
-        "warnings": [
-            "Headless detection is mitigated via stealth UA override but some sites still gate on it.",
-        ],
-    },
-    {
-        "id": "managed_profile",
-        "tool": "session_start",
-        "summary": (
-            "Reusable persistent profile stored under the centralized state root "
-            "(profiles/<name>). Cookies/local-storage survive across runs."
-        ),
-        "when_to_use": (
-            "Multi-account automation that needs durable identity without touching the user's real browser."
-        ),
-        "required_args": ["profile=<name>"],
-        "optional_args": ["headless", "start_url", "cookie_name", "launch_config"],
-        "example": {
-            "tool": "session_start",
-            "args": {"profile": "twitter_main", "start_url": "https://x.com/home"},
-        },
-        "warnings": [
-            "Run only one session per managed profile at a time. The profile dir cannot be locked twice.",
-        ],
-    },
-    {
-        "id": "live_profile_clone",
-        "tool": "session_start",
-        "summary": (
-            "Spawn a NEW browser instance backed by an ephemeral copy of the user's real "
-            "profile so the live browser is never touched. Default clone_strategy is "
-            "'auth_only', which is fast (sub-second), tiny (<100 MB), cross-platform, "
-            "and safe to run while the source browser is open."
-        ),
-        "when_to_use": (
-            "Recommended path whenever the agent needs the user's real logged-in cookies. "
-            "Always launches a brand-new browser process; never attaches to a running one."
-        ),
-        "required_args": ["user_data_dir=<live profile dir>"],
-        "optional_args": [
-            "clone_strategy (auth_only [default] | cow [macOS] | full)",
-            "profile_directory (defaults to 'Default')",
-            "browser_executable_path",
-            "duplicate_user_data_dir (defaults to true for external paths)",
-        ],
-        "example": {
-            "tool": "session_start",
-            "args": {
-                "user_data_dir": "~/Library/Application Support/BraveSoftware/Brave-Browser",
-                "profile_directory": "Default",
-                "browser_executable_path": "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-                "clone_strategy": "auth_only",
-            },
-        },
-        "warnings": [
-            "Use the same browser binary that owns the source profile (Chrome -> Chrome, Brave -> Brave) so OS-keychain cookie decryption works.",
-            "macOS may show a one-time Keychain access prompt the first time the cloned process reads <Browser> Safe Storage.",
-            "Some sites bind sessions to a device fingerprint and may show a 'new device' challenge even with valid cookies.",
-        ],
-        "clone_strategies": {
-            "auth_only": (
-                "Default. Copies only Local State + cookie/login SQLite files via SQLite online "
-                "backup. Cross-platform. Sub-second, tens of MB. Safe while source browser is running."
-            ),
-            "cow": (
-                "macOS only. Uses APFS clonefile (cp -Rc) for near-instant copy-on-write of the "
-                "full profile. Falls back to auth_only on non-Darwin or non-APFS volumes."
-            ),
-            "full": (
-                "Legacy whole-profile shutil.copytree. Slow, large. Kept as escape hatch only."
-            ),
-        },
-    },
-    {
-        "id": "attach_existing_with_new_tab",
-        "tool": "session_attach",
-        "summary": (
-            "Attach to an already-running browser via DevTools host/port and open a "
-            "fresh tab for agent work. Original tabs are NOT touched."
-        ),
-        "when_to_use": (
-            "Continue work in the user's running browser without hijacking their tabs. "
-            "Requires the target browser to be launched with --remote-debugging-port."
-        ),
-        "required_args": ["host AND port  OR  ws_url  OR  state_file"],
-        "optional_args": ["start_url", "new_tab (defaults to true)"],
-        "example": {
-            "tool": "session_attach",
-            "args": {"host": "127.0.0.1", "port": 9222, "start_url": "https://example.com"},
-        },
-        "warnings": [
-            "Setting new_tab=false will route navigations through the user's main tab and CAN hijack it.",
-        ],
-    },
-    {
-        "id": "attach_existing_take_over",
-        "tool": "session_attach",
-        "summary": "Attach and drive the existing main tab directly (advanced).",
-        "when_to_use": (
-            "You explicitly want to inspect or manipulate whatever is currently in the user's foreground tab."
-        ),
-        "required_args": ["host AND port  OR  ws_url  OR  state_file", "new_tab=false"],
-        "optional_args": ["start_url"],
-        "example": {
-            "tool": "session_attach",
-            "args": {"host": "127.0.0.1", "port": 9222, "new_tab": False},
-        },
-        "warnings": [
-            "The agent will operate on whatever tab Chrome considers main_tab; navigation is destructive.",
-        ],
-    },
-]
-
-
-def _candidate_browser_binaries() -> list[dict[str, Any]]:
-    """Return common Chromium-family binary paths per OS, with existence flags."""
-    candidates: list[dict[str, Any]] = []
-
-    def add(label: str, path: str) -> None:
-        expanded = Path(path).expanduser()
-        candidates.append(
-            {
-                "label": label,
-                "path": str(expanded),
-                "exists": expanded.exists(),
-            }
-        )
-
-    if sys.platform == "darwin":
-        add("Google Chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-        add("Brave Browser", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser")
-        add("Microsoft Edge", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
-        add("Chromium", "/Applications/Chromium.app/Contents/MacOS/Chromium")
-    elif sys.platform.startswith("linux"):
-        add("Google Chrome", "/usr/bin/google-chrome")
-        add("Google Chrome (stable)", "/usr/bin/google-chrome-stable")
-        add("Chromium", "/usr/bin/chromium")
-        add("Chromium Browser", "/usr/bin/chromium-browser")
-        add("Brave Browser", "/usr/bin/brave-browser")
-    elif sys.platform.startswith("win"):
-        add(
-            "Google Chrome",
-            r"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-        )
-        add(
-            "Google Chrome (x86)",
-            r"C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-        )
-        add(
-            "Brave Browser",
-            r"C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
-        )
-        add(
-            "Microsoft Edge",
-            r"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-        )
-    return candidates
-
-
-def _detect_nodriver_status() -> dict[str, Any]:
-    try:
-        import nodriver  # noqa: F401
-    except Exception as exc:  # noqa: BLE001
-        return {"available": False, "error": str(exc)}
-    return {"available": True}
-
-
-async def _probe_devtools_endpoint(host: str, port: int, *, timeout: float = 2.0) -> dict[str, Any]:
-    """Quickly check whether a Chrome DevTools endpoint is reachable.
-
-    Uses the standard ``/json/version`` endpoint exposed by Chromium when launched
-    with ``--remote-debugging-port``.  Returns a dict with reachable status and the
-    endpoint metadata when available.
-    """
-    import urllib.error
-    import urllib.request
-
-    url = f"http://{host}:{port}/json/version"
-
-    def _do_request() -> dict[str, Any]:
-        try:
-            with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310 - localhost probe
-                payload = json.loads(response.read().decode("utf-8"))
-            return {
-                "reachable": True,
-                "browser": payload.get("Browser"),
-                "user_agent": payload.get("User-Agent"),
-                "webSocketDebuggerUrl": payload.get("webSocketDebuggerUrl"),
-            }
-        except urllib.error.URLError as exc:
-            return {"reachable": False, "error": str(exc)}
-        except Exception as exc:  # noqa: BLE001
-            return {"reachable": False, "error": str(exc)}
-
-    return await asyncio.to_thread(_do_request)
-
-
-CLONE_STRATEGIES = ("auth_only", "cow", "full")
-DEFAULT_CLONE_STRATEGY = "auth_only"
-
-# Files copied by the auth_only strategy. Paths are relative to the chosen
-# profile_directory inside the source user_data_dir, EXCEPT for entries that
-# start with "<root>/" which are anchored to the user_data_dir root itself.
-#
-# - SQLite databases (*.sqlite-style files Chrome writes) are copied via the
-#   SQLite online backup API so we don't fight the source browser's lock.
-# - Plain JSON files (Local State, Preferences) and write-rarely files are
-#   copied with shutil.copy2.
-_AUTH_ONLY_ROOT_FILES = (
-    "Local State",
-)
-_AUTH_ONLY_PROFILE_PLAIN_FILES = (
-    "Preferences",
-    "Secure Preferences",
-)
-# These are SQLite databases. Chrome may hold them open in WAL mode while
-# running; SQLite's online backup API handles concurrent reads safely.
-_AUTH_ONLY_PROFILE_SQLITE_FILES = (
-    "Cookies",
-    "Network/Cookies",
-    "Login Data",
-    "Login Data For Account",
-    "Web Data",
-)
-_SINGLETON_MARKERS = ("SingletonLock", "SingletonCookie", "SingletonSocket")
-
-
-def _strip_singleton_markers(root: Path) -> None:
-    """Delete Chromium's singleton lock files from a cloned user_data_dir.
-
-    These can be carried over from a CoW snapshot of a running browser; if
-    present they cause Chromium to refuse to launch with a 'profile in use'
-    error, even though the cloned location is brand new.
-    """
-    for marker in _SINGLETON_MARKERS:
-        try:
-            (root / marker).unlink()
-        except FileNotFoundError:
-            pass
-        except IsADirectoryError:
-            shutil.rmtree(root / marker, ignore_errors=True)
-        except OSError as exc:
-            logger.debug("Could not strip singleton marker %s: %s", marker, exc)
-
-
-def _safe_copy_sqlite(src: Path, dst: Path) -> None:
-    """Snapshot a SQLite DB that may be open and being written by another process.
-
-    Uses the SQLite online backup API over a plain read-only handle
-    (``mode=ro``). A read-only connection takes a shared lock, which WAL
-    readers are allowed to hold concurrently with the writer, and
-    ``backup()`` produces a consistent snapshot that INCLUDES committed WAL
-    transactions.
-
-    Important: we deliberately do NOT pass ``immutable=1``. Chromium keeps
-    ``Cookies``/``Login Data`` in WAL mode, and ``immutable`` makes SQLite
-    skip the ``-wal`` sidecar entirely — which would silently drop the
-    freshest (committed-but-not-yet-checkpointed) auth cookies and yield a
-    clone that looks valid but is logged out.
-
-    If the backup raises any ``sqlite3.Error`` (for example, the file is not a
-    SQLite DB, or it is exclusively locked), we fall back to a hot file copy of
-    the main DB plus its ``-wal``/``-shm`` sidecars so the clone stays
-    self-consistent and still carries recent WAL data.
-    """
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if dst.exists():
-        try:
-            dst.unlink()
-        except OSError:
-            pass
-    src_uri = f"file:{quote(str(src))}?mode=ro"
-    try:
-        with sqlite3.connect(src_uri, uri=True, timeout=2.0) as src_db:
-            with sqlite3.connect(str(dst), timeout=2.0) as dst_db:
-                src_db.backup(dst_db, pages=-1, sleep=0)
-        return
-    except sqlite3.Error as exc:
-        logger.debug(
-            "SQLite online backup of %s failed (%s); falling back to file copy.",
-            src,
-            exc,
-        )
-    try:
-        shutil.copy2(src, dst)
-        for suffix in ("-wal", "-shm"):
-            sidecar = src.parent / (src.name + suffix)
-            if sidecar.exists():
-                shutil.copy2(sidecar, dst.parent / (dst.name + suffix))
-    except OSError as exc:
-        logger.warning("Failed to copy SQLite DB %s: %s", src, exc)
-
-
-def _selective_auth_clone(
-    *,
-    source_root: Path,
-    profile_directory: str,
-) -> dict[str, Any]:
-    """Cross-platform auth-only clone of a Chromium profile.
-
-    Copies just the files needed for the cloned process to authenticate
-    against the same sites the source browser is logged into:
-
-      * `<source>/Local State`   (top-level; contains os_crypt key reference)
-      * `<source>/<profile>/Preferences` and `Secure Preferences`
-      * `<source>/<profile>/Cookies`, `Network/Cookies`, `Login Data*`,
-        `Web Data` SQLite DBs (via SQLite online backup, safe to read while
-        the source browser is running)
-      * an empty `First Run` marker so Chromium skips first-run UI.
-
-    Typical cost: tens of MB and well under one second on local disk.
-    Returns the manifest expected by ``_prepare_ephemeral_user_data_dir``.
-    """
-    temp_root = Path(tempfile.mkdtemp(prefix="bbmcp-auth-clone-")).resolve()
-    target_profile = temp_root / profile_directory
-    target_profile.mkdir(parents=True, exist_ok=True)
-    (target_profile / "Network").mkdir(parents=True, exist_ok=True)
-
-    copied: list[str] = []
-
-    # Skip first-run UI.
-    try:
-        (temp_root / "First Run").write_bytes(b"")
-        copied.append(str(temp_root / "First Run"))
-    except OSError as exc:
-        logger.debug("Could not write First Run marker: %s", exc)
-
-    for rel in _AUTH_ONLY_ROOT_FILES:
-        src = source_root / rel
-        if src.exists() and src.is_file():
-            try:
-                shutil.copy2(src, temp_root / rel)
-                copied.append(str(temp_root / rel))
-            except OSError as exc:
-                logger.warning("Failed to clone auth file %s: %s", rel, exc)
-
-    source_profile = source_root / profile_directory
-    if source_profile.exists() and source_profile.is_dir():
-        for rel in _AUTH_ONLY_PROFILE_PLAIN_FILES:
-            src = source_profile / rel
-            if src.exists() and src.is_file():
-                try:
-                    shutil.copy2(src, target_profile / rel)
-                    copied.append(str(target_profile / rel))
-                except OSError as exc:
-                    logger.warning("Failed to clone profile file %s: %s", rel, exc)
-        for rel in _AUTH_ONLY_PROFILE_SQLITE_FILES:
-            src = source_profile / rel
-            if src.exists() and src.is_file():
-                _safe_copy_sqlite(src, target_profile / rel)
-                if (target_profile / rel).exists():
-                    copied.append(str(target_profile / rel))
-
-    _strip_singleton_markers(temp_root)
-    return {
-        "source_user_data_dir": str(source_root),
-        "ephemeral_user_data_dir": str(temp_root),
-        "profile_directory": profile_directory,
-        "copied_paths": copied,
-        "clone_strategy": "auth_only",
-    }
-
-
-def _cow_clone(
-    *,
-    source_root: Path,
-    profile_directory: str,
-) -> dict[str, Any]:
-    """macOS APFS copy-on-write clone via ``cp -Rc``.
-
-    Near-instant, near-zero disk cost, and preserves the full profile (incl.
-    extensions/history). Falls back to selective auth_only on non-Darwin
-    platforms or when ``cp -Rc`` returns non-zero.
-    """
-    if sys.platform != "darwin":
-        return _selective_auth_clone(
-            source_root=source_root,
-            profile_directory=profile_directory,
-        )
-
-    temp_root = Path(tempfile.mkdtemp(prefix="bbmcp-cow-clone-")).resolve()
-    # cp expects the destination not to exist for a directory copy, but
-    # mkdtemp already created it; remove and re-create empty.
-    try:
-        shutil.rmtree(temp_root)
-    except OSError:
-        pass
-    try:
-        result = subprocess.run(
-            ["cp", "-Rc", str(source_root), str(temp_root)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except (subprocess.SubprocessError, OSError):
-        result = None
-
-    if result is None or result.returncode != 0 or not temp_root.exists():
-        # Fall back to selective auth-only clone.
-        try:
-            shutil.rmtree(temp_root, ignore_errors=True)
-        except OSError:
-            pass
-        return _selective_auth_clone(
-            source_root=source_root,
-            profile_directory=profile_directory,
-        )
-
-    _strip_singleton_markers(temp_root)
-    return {
-        "source_user_data_dir": str(source_root),
-        "ephemeral_user_data_dir": str(temp_root),
-        "profile_directory": profile_directory,
-        "copied_paths": [str(temp_root)],
-        "clone_strategy": "cow",
-    }
 
 
 # Actions blocked when a session is marked read_only. This is a denylist of
@@ -631,67 +101,6 @@ def _url_scheme(value: str | None) -> str | None:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _normalize_port(value: Any) -> int:
-    try:
-        port = int(value)
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"Invalid port value: {value}") from exc
-    if port <= 0 or port > 65535:
-        raise ValueError(f"Port out of range: {port}")
-    return port
-
-
-def _connection_from_ws_url(ws_url: str) -> tuple[str, int]:
-    parsed = urlparse(ws_url)
-    if parsed.scheme not in {"ws", "wss", "http", "https"}:
-        raise ValueError(f"Unsupported debugger URL scheme: {parsed.scheme}")
-    if not parsed.hostname or not parsed.port:
-        raise ValueError(f"Could not parse host/port from debugger URL: {ws_url}")
-    return parsed.hostname, _normalize_port(parsed.port)
-
-
-def _connection_from_state_file(state_file: str | Path) -> tuple[str, int]:
-    path = Path(state_file).expanduser()
-    if not path.exists():
-        raise FileNotFoundError(f"State file not found: {path}")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    host = str(data.get("host", "")).strip()
-    port = _normalize_port(data.get("port"))
-    if not host:
-        raise ValueError(f"State file {path} is missing host.")
-    return host, port
-
-
-def resolve_connection(
-    *,
-    host: str | None,
-    port: int | None,
-    ws_url: str | None,
-    state_file: str | None,
-) -> tuple[str, int]:
-    provided = sum(
-        [
-            1 if (host is not None or port is not None) else 0,
-            1 if ws_url else 0,
-            1 if state_file else 0,
-        ]
-    )
-    if provided == 0:
-        raise ValueError("Provide host+port, ws_url, or state_file to attach.")
-    if provided > 1:
-        raise ValueError("Use exactly one connection mode: host+port OR ws_url OR state_file.")
-
-    if ws_url:
-        return _connection_from_ws_url(ws_url)
-
-    if state_file:
-        return _connection_from_state_file(state_file)
-
-    if host is None or port is None:
-        raise ValueError("Both host and port are required together.")
-    return str(host).strip(), _normalize_port(port)
 
 
 def _domain_from_value(value: str | None) -> str | None:
@@ -828,14 +237,6 @@ class BrowserSessionManager:
             base_policy["allow_evaluate"] = bool(default_allow_evaluate)
         self._base_policy = base_policy
 
-        global _STARTUP_SWEEP_DONE
-        if not _STARTUP_SWEEP_DONE:
-            _STARTUP_SWEEP_DONE = True
-            try:
-                sweep_stale_ephemeral_clones()
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Startup ephemeral-clone sweep failed: %s", exc)
-
     def _new_session_policy(self) -> dict[str, Any]:
         return dict(self._base_policy)
 
@@ -864,98 +265,6 @@ class BrowserSessionManager:
     async def get_state_paths(self) -> dict[str, Any]:
         return self._state_store.paths_summary()
 
-    async def launch_modes(self) -> dict[str, Any]:
-        """Return a structured catalog of supported browser launch recipes.
-
-        This is meant to be the *first* thing an AI client calls before deciding
-        whether to use ``session_start`` vs ``session_attach`` and which arguments
-        to pass.  It exists because the surface is wide enough that callers
-        otherwise spam multiple flags and end up with overlapping windows or
-        hijacked tabs.
-        """
-        return {
-            "count": len(LAUNCH_MODES),
-            "modes": LAUNCH_MODES,
-            "decision_guide": [
-                "Need a fresh isolated browser? -> ephemeral_fresh.",
-                "Need it server-side / no UI? -> headless_scrape.",
-                "Need a logged-in identity that persists? -> managed_profile.",
-                "Need the user's REAL cookies one time, without disrupting them? -> live_profile_clone.",
-                "User's browser is already running w/ remote-debugging-port? -> attach_existing_with_new_tab.",
-                "User explicitly wants you to take over the foreground tab? -> attach_existing_take_over.",
-            ],
-        }
-
-    async def preflight(
-        self,
-        *,
-        host: str | None = None,
-        port: int | None = None,
-        browser_executable_path: str | None = None,
-        user_data_dir: str | None = None,
-    ) -> dict[str, Any]:
-        """Run quick environment checks for browser launching.
-
-        Returns information about:
-          * The state-root configuration.
-          * Detected Chromium-family binaries on this machine.
-          * Whether the underlying ``nodriver`` runtime imports cleanly.
-          * Optional liveness probe of an existing remote-debugging endpoint.
-          * Optional sanity check for a user-data-dir (exists / lock-file present).
-        """
-        result: dict[str, Any] = {
-            "platform": sys.platform,
-            "python": sys.version.split()[0],
-            "state_paths": self._state_store.paths_summary(),
-            "nodriver": _detect_nodriver_status(),
-            "candidate_browsers": _candidate_browser_binaries(),
-            "checks": [],
-        }
-
-        if browser_executable_path:
-            exe = Path(browser_executable_path).expanduser()
-            result["checks"].append(
-                {
-                    "name": "browser_executable_path",
-                    "path": str(exe),
-                    "exists": exe.exists(),
-                    "executable": exe.is_file() and os.access(exe, os.X_OK),
-                }
-            )
-
-        if user_data_dir:
-            udd = Path(user_data_dir).expanduser()
-            lock_file = udd / "SingletonLock"
-            result["checks"].append(
-                {
-                    "name": "user_data_dir",
-                    "path": str(udd),
-                    "exists": udd.exists(),
-                    "is_dir": udd.is_dir(),
-                    "looks_locked": lock_file.exists(),
-                    "hint": (
-                        "If looks_locked is true another browser is using this profile. "
-                        "Use duplicate_user_data_dir=true to clone it instead of attaching."
-                    ),
-                }
-            )
-
-        if host and port:
-            probe = await _probe_devtools_endpoint(host, port)
-            result["checks"].append(
-                {
-                    "name": "devtools_endpoint",
-                    "host": host,
-                    "port": port,
-                    **probe,
-                }
-            )
-
-        # Surface a synthesized "ready" verdict so callers don't have to inspect every key.
-        ready = result["nodriver"].get("available", False)
-        result["ready"] = ready
-        return result
-
     async def list_profiles(self) -> dict[str, Any]:
         profiles = self._state_store.list_profiles()
         return {
@@ -972,7 +281,6 @@ class BrowserSessionManager:
         profile: str,
         description: str | None = None,
         account_aliases: list[str] | None = None,
-        cookie_name: str | None = None,
         launch_config: str | None = None,
         launch_overrides: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -980,7 +288,6 @@ class BrowserSessionManager:
             profile_name=profile,
             description=description,
             account_aliases=account_aliases,
-            cookie_name=cookie_name,
             launch_config=launch_config,
             launch_overrides=launch_overrides,
         )
@@ -1021,13 +328,6 @@ class BrowserSessionManager:
 
     async def delete_launch_config(self, *, config_name: str) -> dict[str, Any]:
         return self._state_store.delete_launch_config(config_name)
-
-    async def list_cookie_jars(self) -> dict[str, Any]:
-        jars = self._state_store.list_cookie_jars()
-        return {
-            "count": len(jars),
-            "cookie_jars": jars,
-        }
 
     async def set_policy(
         self,
@@ -1478,7 +778,7 @@ class BrowserSessionManager:
         if session.trace_capture_screenshot_on_error:
             screenshot_path = (
                 Path(tempfile.gettempdir())
-                / f"bbmcp-trace-{session.trace_id or 'trace'}-{uuid.uuid4().hex[:8]}.png"
+                / f"nrbmcp-trace-{session.trace_id or 'trace'}-{uuid.uuid4().hex[:8]}.png"
             )
             try:
                 saved = await tab.save_screenshot(
@@ -1493,7 +793,7 @@ class BrowserSessionManager:
         if session.trace_capture_html_on_error:
             html_path = (
                 Path(tempfile.gettempdir())
-                / f"bbmcp-trace-{session.trace_id or 'trace'}-{uuid.uuid4().hex[:8]}.html"
+                / f"nrbmcp-trace-{session.trace_id or 'trace'}-{uuid.uuid4().hex[:8]}.html"
             )
             try:
                 html = str(await tab.get_content())
@@ -1557,15 +857,14 @@ class BrowserSessionManager:
         *,
         headless: bool | None,
         start_url: str | None,
-        user_data_dir: str | None,
         browser_args: list[str] | None,
         browser_executable_path: str | None,
         sandbox: bool | None,
         cookie_file: str | None,
         cookie_fallback_domain: str | None,
         profile: str | None,
-        cookie_name: str | None,
         launch_config: str | None,
+        proxy: str | None = None,
     ) -> dict[str, Any]:
         explicit = normalize_launch_options(
             {
@@ -1573,14 +872,13 @@ class BrowserSessionManager:
                 for key, value in {
                     "headless": headless,
                     "start_url": start_url,
-                    "user_data_dir": user_data_dir,
                     "browser_args": browser_args,
                     "browser_executable_path": browser_executable_path,
                     "sandbox": sandbox,
                     "cookie_file": cookie_file,
                     "cookie_fallback_domain": cookie_fallback_domain,
                     "profile": profile,
-                    "cookie_name": cookie_name,
+                    "proxy": proxy,
                 }.items()
                 if value is not None
             }
@@ -1617,9 +915,6 @@ class BrowserSessionManager:
             profile_launch_overrides = normalize_launch_options(
                 profile_payload.get("launch_overrides")
             )
-            profile_cookie_name = profile_payload.get("cookie_name")
-            if isinstance(profile_cookie_name, str) and profile_cookie_name.strip():
-                profile_launch_overrides["cookie_name"] = profile_cookie_name
             profile_launch_overrides["profile"] = resolved_profile_name
 
         resolved_values = effective_launch_options(
@@ -1643,19 +938,10 @@ class BrowserSessionManager:
                 Path(resolved_user_data_dir).expanduser().resolve()
             )
 
-        cookie_file_source: str | None = None
         resolved_cookie_file: str | None = None
         cookie_file_from_values = resolved_values.get("cookie_file")
         if isinstance(cookie_file_from_values, str) and cookie_file_from_values.strip():
             resolved_cookie_file = str(Path(cookie_file_from_values).expanduser())
-            cookie_file_source = "cookie_file"
-        else:
-            cookie_name_value = resolved_values.get("cookie_name")
-            if isinstance(cookie_name_value, str) and cookie_name_value.strip():
-                normalized_cookie_name = validate_name(cookie_name_value, label="cookie jar name")
-                resolved_values["cookie_name"] = normalized_cookie_name
-                resolved_cookie_file = str(self._state_store.cookie_jar_path(normalized_cookie_name))
-                cookie_file_source = "cookie_jar"
         resolved_values["cookie_file"] = resolved_cookie_file
 
         return {
@@ -1667,92 +953,7 @@ class BrowserSessionManager:
             "profile_launch_config_name": profile_launch_config_name,
             "profile": profile_payload,
             "profile_name": resolved_profile_name,
-            "cookie_file_source": cookie_file_source,
         }
-
-    def _is_managed_user_data_dir(self, user_data_dir: str) -> bool:
-        candidate = Path(user_data_dir).expanduser().resolve()
-        managed_root = self._state_store.profiles_dir.resolve()
-        return candidate == managed_root or managed_root in candidate.parents
-
-    def _prepare_ephemeral_user_data_dir(
-        self,
-        *,
-        source_user_data_dir: str,
-        profile_directory: str,
-        clone_strategy: str | None = None,
-    ) -> dict[str, Any]:
-        """Snapshot the source user_data_dir into an ephemeral clone.
-
-        Strategies (set via ``clone_strategy``):
-
-        * ``auth_only`` (default): copy only the small set of files the
-          launched browser needs to authenticate to the same sites the
-          source profile is logged into. Cross-platform, sub-second.
-          Safe to run while the source browser is open.
-        * ``cow``: macOS-only APFS copy-on-write of the full profile.
-          Falls back to ``auth_only`` on other platforms or if the
-          ``cp -Rc`` invocation fails.
-        * ``full``: legacy ``shutil.copytree`` of the whole profile.
-          Slow and large; retained as escape hatch.
-        """
-        source_root = Path(source_user_data_dir).expanduser().resolve()
-        if not source_root.exists() or not source_root.is_dir():
-            raise FileNotFoundError(f"user_data_dir not found: {source_root}")
-
-        strategy = (clone_strategy or DEFAULT_CLONE_STRATEGY).strip().lower()
-        if strategy not in CLONE_STRATEGIES:
-            raise ValueError(
-                f"Unknown clone_strategy '{strategy}'. Expected one of {CLONE_STRATEGIES}."
-            )
-
-        if strategy == "auth_only":
-            return _selective_auth_clone(
-                source_root=source_root,
-                profile_directory=profile_directory,
-            )
-        if strategy == "cow":
-            return _cow_clone(
-                source_root=source_root,
-                profile_directory=profile_directory,
-            )
-
-        # strategy == "full"
-        temp_root = Path(tempfile.mkdtemp(prefix="bbmcp-profile-clone-")).resolve()
-        copied_paths: list[str] = []
-
-        local_state_path = source_root / "Local State"
-        if local_state_path.exists():
-            shutil.copy2(local_state_path, temp_root / "Local State")
-            copied_paths.append(str(temp_root / "Local State"))
-
-        source_profile_dir = source_root / profile_directory
-        target_profile_dir = temp_root / profile_directory
-        if source_profile_dir.exists() and source_profile_dir.is_dir():
-            shutil.copytree(source_profile_dir, target_profile_dir, dirs_exist_ok=True)
-            copied_paths.append(str(target_profile_dir))
-        else:
-            shutil.copytree(source_root, temp_root, dirs_exist_ok=True)
-            copied_paths.append(str(temp_root))
-
-        _strip_singleton_markers(temp_root)
-        return {
-            "source_user_data_dir": str(source_root),
-            "ephemeral_user_data_dir": str(temp_root),
-            "profile_directory": profile_directory,
-            "copied_paths": copied_paths,
-            "clone_strategy": "full",
-        }
-
-    @staticmethod
-    def _cleanup_ephemeral_user_data_dir(session: BrowserSession | None) -> None:
-        if not session:
-            return
-        metadata = session.metadata if isinstance(session.metadata, dict) else {}
-        ephemeral_user_data_dir = metadata.get("ephemeral_user_data_dir")
-        if not isinstance(ephemeral_user_data_dir, str) or not ephemeral_user_data_dir.strip():
-            return
-        _purge_ephemeral_dir(ephemeral_user_data_dir)
 
     async def start_session(
         self,
@@ -1760,32 +961,27 @@ class BrowserSessionManager:
         session_id: str | None,
         headless: bool | None,
         start_url: str | None,
-        user_data_dir: str | None,
         browser_args: list[str] | None,
         browser_executable_path: str | None,
         sandbox: bool | None,
         cookie_file: str | None,
         cookie_fallback_domain: str | None,
         profile: str | None,
-        cookie_name: str | None,
         launch_config: str | None,
-        duplicate_user_data_dir: bool | None = None,
-        profile_directory: str | None = None,
-        clone_strategy: str | None = None,
+        proxy: str | None = None,
     ) -> dict[str, Any]:
         resolved_session_id = session_id or f"sess_{uuid.uuid4().hex[:12]}"
         launch_context = self._resolve_launch_context(
             headless=headless,
             start_url=start_url,
-            user_data_dir=user_data_dir,
             browser_args=browser_args,
             browser_executable_path=browser_executable_path,
             sandbox=sandbox,
             cookie_file=cookie_file,
             cookie_fallback_domain=cookie_fallback_domain,
             profile=profile,
-            cookie_name=cookie_name,
             launch_config=launch_config,
+            proxy=proxy,
         )
         launch_values = launch_context["values"]
         resolved_headless = bool(launch_values.get("headless", False))
@@ -1796,70 +992,8 @@ class BrowserSessionManager:
         resolved_sandbox = bool(launch_values.get("sandbox", True))
         resolved_cookie_file = launch_values.get("cookie_file")
         resolved_cookie_fallback_domain = launch_values.get("cookie_fallback_domain")
-        resolved_profile_directory = (
-            str(profile_directory).strip()
-            if isinstance(profile_directory, str) and str(profile_directory).strip()
-            else "Default"
-        )
-        duplicate_applied = False
-        duplicate_source_user_data_dir: str | None = None
-        ephemeral_user_data_dir: str | None = None
-        duplicate_copy_paths: list[str] = []
-        applied_clone_strategy: str | None = None
-
-        if clone_strategy is not None:
-            normalized_clone_strategy = str(clone_strategy).strip().lower()
-            if normalized_clone_strategy not in CLONE_STRATEGIES:
-                raise ValueError(
-                    "clone_strategy must be one of "
-                    f"{CLONE_STRATEGIES}, got '{clone_strategy}'."
-                )
-        else:
-            normalized_clone_strategy = DEFAULT_CLONE_STRATEGY
-
-        should_duplicate_user_data_dir = bool(duplicate_user_data_dir)
-        if duplicate_user_data_dir is None and isinstance(resolved_user_data_dir, str):
-            # Default safety behavior:
-            # if caller points at an external browser profile, clone it first so we avoid
-            # disrupting the user's active browser instance.
-            should_duplicate_user_data_dir = not self._is_managed_user_data_dir(
-                resolved_user_data_dir
-            )
-
-        if isinstance(resolved_user_data_dir, str) and should_duplicate_user_data_dir:
-            clone_info = self._prepare_ephemeral_user_data_dir(
-                source_user_data_dir=resolved_user_data_dir,
-                profile_directory=resolved_profile_directory,
-                clone_strategy=normalized_clone_strategy,
-            )
-            duplicate_applied = True
-            duplicate_source_user_data_dir = clone_info["source_user_data_dir"]
-            ephemeral_user_data_dir = clone_info["ephemeral_user_data_dir"]
-            duplicate_copy_paths = list(clone_info["copied_paths"])
-            applied_clone_strategy = clone_info.get("clone_strategy", normalized_clone_strategy)
-            resolved_user_data_dir = ephemeral_user_data_dir
-            # Register the clone so it is reclaimed even if launch fails or the
-            # process is terminated before stop_session runs.
-            _track_ephemeral_dir(ephemeral_user_data_dir)
-            logger.info(
-                "Cloned profile via '%s' strategy (%d paths) into %s",
-                applied_clone_strategy,
-                len(duplicate_copy_paths),
-                ephemeral_user_data_dir,
-            )
-
-        # Only push --profile-directory when an explicit user_data_dir is in play.
-        # Without a backing data dir, the flag has no useful effect and can confuse
-        # Chromium when launched alongside an active system browser.
-        if (
-            isinstance(resolved_user_data_dir, str)
-            and resolved_user_data_dir.strip()
-            and resolved_profile_directory
-            and not any(
-                arg.startswith("--profile-directory=") for arg in resolved_browser_args
-            )
-        ):
-            resolved_browser_args.append(f"--profile-directory={resolved_profile_directory}")
+        resolved_proxy_spec = launch_values.get("proxy")
+        proxy_config = parse_proxy(resolved_proxy_spec)
 
         browser = BridgeBrowser(
             headless=resolved_headless,
@@ -1867,24 +1001,26 @@ class BrowserSessionManager:
             browser_args=resolved_browser_args,
             browser_executable_path=resolved_browser_executable_path,
             sandbox=resolved_sandbox,
+            proxy=proxy_config,
         )
         await browser.start()
         try:
+            proxy_timezone_info: dict[str, Any] | None = None
+            if proxy_config is not None:
+                # Align the browser timezone to the proxy egress IP before any
+                # real navigation, so the target site never sees a TZ mismatch.
+                proxy_timezone_info = await browser.align_timezone_to_proxy()
+
             cookie_applied_count = 0
-            cookie_skipped_reason: str | None = None
             if resolved_cookie_file:
                 cookie_path = Path(str(resolved_cookie_file)).expanduser()
-                from_cookie_jar = launch_context["cookie_file_source"] == "cookie_jar"
-                if from_cookie_jar and not cookie_path.exists():
-                    cookie_skipped_reason = "cookie_jar_not_found"
-                else:
-                    cookies = load_cookie_file(str(cookie_path))
-                    cookie_applied_count = len(cookies)
-                    await browser.set_cookies(
-                        cookies,
-                        fallback_domain=resolved_cookie_fallback_domain,
-                        navigate_blank_first=True,
-                    )
+                cookies = load_cookie_file(str(cookie_path))
+                cookie_applied_count = len(cookies)
+                await browser.set_cookies(
+                    cookies,
+                    fallback_domain=resolved_cookie_fallback_domain,
+                    navigate_blank_first=True,
+                )
 
             if resolved_start_url:
                 await browser.goto(str(resolved_start_url), wait_seconds=1.2)
@@ -1906,28 +1042,19 @@ class BrowserSessionManager:
                     "profile_reference": profile,
                     "launch_config": launch_context["selected_launch_config_name"],
                     "profile_launch_config": launch_context["profile_launch_config_name"],
-                    "cookie_name": launch_values.get("cookie_name"),
                     "cookie_file": str(Path(resolved_cookie_file).expanduser())
                     if resolved_cookie_file
                     else None,
-                    "cookie_file_source": launch_context["cookie_file_source"],
                     "cookie_fallback_domain": resolved_cookie_fallback_domain,
                     "cookie_applied_count": cookie_applied_count,
-                    "cookie_skipped_reason": cookie_skipped_reason,
                     "start_url": resolved_start_url,
                     "user_data_dir": resolved_user_data_dir,
-                    "duplicate_user_data_dir_requested": duplicate_user_data_dir,
-                    "duplicate_user_data_dir_applied": duplicate_applied,
-                    "duplicate_user_data_dir_source": duplicate_source_user_data_dir,
-                    "ephemeral_user_data_dir": ephemeral_user_data_dir,
-                    "profile_directory": resolved_profile_directory,
-                    "clone_strategy_requested": clone_strategy,
-                    "clone_strategy_applied": applied_clone_strategy,
-                    "duplicate_copy_paths_count": len(duplicate_copy_paths),
-                    "duplicate_copy_paths": duplicate_copy_paths,
                     "browser_args": list(resolved_browser_args),
                     "browser_executable_path": resolved_browser_executable_path,
                     "sandbox": resolved_sandbox,
+                    "proxy": proxy_config.to_metadata() if proxy_config else None,
+                    "proxy_timezone": browser.timezone_id,
+                    "proxy_exit": proxy_timezone_info,
                 },
                 policy=self._new_session_policy(),
                 last_known_url=page.get("url"),
@@ -1935,70 +1062,6 @@ class BrowserSessionManager:
             )
             await self._insert_session(session)
             logger.info("Started launch session %s", resolved_session_id)
-            return session.summary()
-        except Exception:
-            await browser.close()
-            # The clone (which holds copied credential stores) must not survive a
-            # failed launch; the session was never registered, so clean it here.
-            if ephemeral_user_data_dir:
-                _purge_ephemeral_dir(ephemeral_user_data_dir)
-            raise
-
-    async def attach_session(
-        self,
-        *,
-        session_id: str | None,
-        host: str | None,
-        port: int | None,
-        ws_url: str | None,
-        state_file: str | None,
-        start_url: str | None,
-        new_tab: bool | None = None,
-    ) -> dict[str, Any]:
-        resolved_session_id = session_id or f"sess_{uuid.uuid4().hex[:12]}"
-        attach_host, attach_port = resolve_connection(
-            host=host,
-            port=port,
-            ws_url=ws_url,
-            state_file=state_file,
-        )
-        # Default to creating a fresh tab on attach so we never hijack the
-        # user's main_tab. Callers can opt out with new_tab=False.
-        attach_open_new_tab = True if new_tab is None else bool(new_tab)
-        browser = BridgeBrowser(
-            connect_host=attach_host,
-            connect_port=attach_port,
-            attach_open_new_tab=attach_open_new_tab,
-        )
-        await browser.start()
-        try:
-            if start_url:
-                await browser.goto(start_url, wait_seconds=1.2)
-            await ensure_observers(browser)
-            page = await get_url_and_title(browser)
-            session = BrowserSession(
-                session_id=resolved_session_id,
-                browser=browser,
-                mode="attach",
-                created_at=_utc_now_iso(),
-                headless=False,
-                connection_host=browser.connection_host,
-                connection_port=browser.connection_port,
-                websocket_url=browser.websocket_url,
-                metadata={
-                    "ws_url": ws_url,
-                    "state_file": str(Path(state_file).expanduser()) if state_file else None,
-                    "attach_open_new_tab": attach_open_new_tab,
-                    "attach_created_new_tab": browser.attach_created_new_tab,
-                    "attach_main_tab_id": browser.attach_main_tab_id,
-                    "attach_active_tab_id": browser.attach_active_tab_id,
-                },
-                policy=self._new_session_policy(),
-                last_known_url=page.get("url"),
-                last_known_title=page.get("title"),
-            )
-            await self._insert_session(session)
-            logger.info("Attached session %s to %s:%s", resolved_session_id, attach_host, attach_port)
             return session.summary()
         except Exception:
             await browser.close()
@@ -2017,7 +1080,6 @@ class BrowserSessionManager:
             await session.browser.close()
         except Exception as exc:  # noqa: BLE001
             close_error = str(exc)
-        self._cleanup_ephemeral_user_data_dir(session)
         result: dict[str, Any] = {
             "session_id": session_id,
             "stopped": True,
@@ -2038,7 +1100,6 @@ class BrowserSessionManager:
                 await session.browser.close()
             except Exception as exc:  # noqa: BLE001
                 errors.append({"session_id": session.session_id, "error": str(exc)})
-            self._cleanup_ephemeral_user_data_dir(session)
             stopped_ids.append(session.session_id)
         result: dict[str, Any] = {
             "stopped_count": len(stopped_ids),

@@ -25,12 +25,12 @@ MAX_POLL_INTERVAL_SECONDS = 2.0
 
 _OBSERVER_SCRIPT = r"""
 (() => {
-  if (window.__bbmcpObserversInstalled) return;
-  window.__bbmcpObserversInstalled = true;
-  window.__bbmcpConsoleLogs = window.__bbmcpConsoleLogs || [];
-  window.__bbmcpNetworkLogs = window.__bbmcpNetworkLogs || [];
-  window.__bbmcpNetworkInFlight = Number(window.__bbmcpNetworkInFlight || 0);
-  window.__bbmcpLastNetworkActivityTs = Number(window.__bbmcpLastNetworkActivityTs || Date.now());
+  if (window.__nrbmcpObserversInstalled) return;
+  window.__nrbmcpObserversInstalled = true;
+  window.__nrbmcpConsoleLogs = window.__nrbmcpConsoleLogs || [];
+  window.__nrbmcpNetworkLogs = window.__nrbmcpNetworkLogs || [];
+  window.__nrbmcpNetworkInFlight = Number(window.__nrbmcpNetworkInFlight || 0);
+  window.__nrbmcpLastNetworkActivityTs = Number(window.__nrbmcpLastNetworkActivityTs || Date.now());
   const MAX_BUFFER = 500;
 
   const pushBounded = (arr, value) => {
@@ -58,25 +58,25 @@ _OBSERVER_SCRIPT = r"""
 
   const now = () => new Date().toISOString();
   const markNetworkActivity = () => {
-    window.__bbmcpLastNetworkActivityTs = Date.now();
+    window.__nrbmcpLastNetworkActivityTs = Date.now();
   };
   const incrementInFlight = () => {
-    window.__bbmcpNetworkInFlight = Number(window.__bbmcpNetworkInFlight || 0) + 1;
+    window.__nrbmcpNetworkInFlight = Number(window.__nrbmcpNetworkInFlight || 0) + 1;
     markNetworkActivity();
   };
   const decrementInFlight = () => {
-    window.__bbmcpNetworkInFlight = Math.max(0, Number(window.__bbmcpNetworkInFlight || 0) - 1);
+    window.__nrbmcpNetworkInFlight = Math.max(0, Number(window.__nrbmcpNetworkInFlight || 0) - 1);
     markNetworkActivity();
   };
 
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     const original = console[level];
     if (typeof original !== "function") continue;
-    if (original.__bbmcpWrapped) continue;
+    if (original.__nrbmcpWrapped) continue;
 
     const wrapped = function (...args) {
       try {
-        pushBounded(window.__bbmcpConsoleLogs, {
+        pushBounded(window.__nrbmcpConsoleLogs, {
           ts: now(),
           level,
           args: args.map(safeString),
@@ -84,11 +84,11 @@ _OBSERVER_SCRIPT = r"""
       } catch {}
       return original.apply(this, args);
     };
-    wrapped.__bbmcpWrapped = true;
+    wrapped.__nrbmcpWrapped = true;
     console[level] = wrapped;
   }
 
-  if (typeof window.fetch === "function" && !window.fetch.__bbmcpWrapped) {
+  if (typeof window.fetch === "function" && !window.fetch.__nrbmcpWrapped) {
     const originalFetch = window.fetch;
     const wrappedFetch = async (...args) => {
       const startedAt = Date.now();
@@ -105,7 +105,7 @@ _OBSERVER_SCRIPT = r"""
       incrementInFlight();
       try {
         const response = await originalFetch(...args);
-        pushBounded(window.__bbmcpNetworkLogs, {
+        pushBounded(window.__nrbmcpNetworkLogs, {
           ts: now(),
           type: "fetch",
           url: safeString(url),
@@ -116,7 +116,7 @@ _OBSERVER_SCRIPT = r"""
         });
         return response;
       } catch (error) {
-        pushBounded(window.__bbmcpNetworkLogs, {
+        pushBounded(window.__nrbmcpNetworkLogs, {
           ts: now(),
           type: "fetch",
           url: safeString(url),
@@ -131,16 +131,16 @@ _OBSERVER_SCRIPT = r"""
         decrementInFlight();
       }
     };
-    wrappedFetch.__bbmcpWrapped = true;
+    wrappedFetch.__nrbmcpWrapped = true;
     window.fetch = wrappedFetch;
   }
 
-  if (!XMLHttpRequest.prototype.__bbmcpWrapped) {
+  if (!XMLHttpRequest.prototype.__nrbmcpWrapped) {
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
 
     XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-      this.__bbmcpMeta = {
+      this.__nrbmcpMeta = {
         method: method ? String(method).toUpperCase() : "GET",
         url: safeString(url),
       };
@@ -149,12 +149,12 @@ _OBSERVER_SCRIPT = r"""
 
     XMLHttpRequest.prototype.send = function (...args) {
       const startedAt = Date.now();
-      const meta = this.__bbmcpMeta || { method: "GET", url: "unknown" };
+      const meta = this.__nrbmcpMeta || { method: "GET", url: "unknown" };
       incrementInFlight();
 
       const onDone = () => {
         try {
-          pushBounded(window.__bbmcpNetworkLogs, {
+          pushBounded(window.__nrbmcpNetworkLogs, {
             ts: now(),
             type: "xhr",
             url: meta.url,
@@ -170,7 +170,7 @@ _OBSERVER_SCRIPT = r"""
       this.addEventListener("loadend", onDone, { once: true });
       return originalSend.apply(this, args);
     };
-    XMLHttpRequest.prototype.__bbmcpWrapped = true;
+    XMLHttpRequest.prototype.__nrbmcpWrapped = true;
   }
 })();
 """
@@ -339,8 +339,8 @@ def _network_idle_status_script() -> str:
     return """
     (() => {
       const now = Date.now();
-      const inFlight = Number(window.__bbmcpNetworkInFlight || 0);
-      const lastActivity = Number(window.__bbmcpLastNetworkActivityTs || now);
+      const inFlight = Number(window.__nrbmcpNetworkInFlight || 0);
+      const lastActivity = Number(window.__nrbmcpLastNetworkActivityTs || now);
       return {
         in_flight: Math.max(0, inFlight),
         idle_for_ms: Math.max(0, now - lastActivity),
@@ -1320,7 +1320,7 @@ async def get_console_messages(
     payload = normalize_evaluate_payload(
         await browser.evaluate(
             _event_fetch_script(
-                "__bbmcpConsoleLogs",
+                "__nrbmcpConsoleLogs",
                 clamp_limit(limit, max_limit=MAX_EVENT_LIMIT),
                 clear,
             )
@@ -1341,7 +1341,7 @@ async def get_network_requests(
     payload = normalize_evaluate_payload(
         await browser.evaluate(
             _event_fetch_script(
-                "__bbmcpNetworkLogs",
+                "__nrbmcpNetworkLogs",
                 clamp_limit(limit, max_limit=MAX_EVENT_LIMIT),
                 clear,
             )

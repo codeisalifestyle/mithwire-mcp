@@ -40,23 +40,39 @@ class ServerParserTest(unittest.TestCase):
 
 
 class ServerToolsRegistrationTest(unittest.TestCase):
-    def test_server_registers_launch_modes_and_preflight_tools(self) -> None:
+    def test_simplified_surface_drops_attach_modes_preflight_cookiejar(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             server = create_server(state_root=tmpdir)
             tools = asyncio.run(server.list_tools())
             tool_names = {tool.name for tool in tools}
-            self.assertIn("session_launch_modes", tool_names)
-            self.assertIn("session_preflight", tool_names)
-            self.assertIn("session_attach", tool_names)
             self.assertIn("session_start", tool_names)
+            for gone in (
+                "session_attach",
+                "session_launch_modes",
+                "session_preflight",
+                "session_cookie_jar_list",
+            ):
+                self.assertNotIn(gone, tool_names)
 
-    def test_session_attach_tool_advertises_new_tab_arg(self) -> None:
+    def test_session_start_surface_is_simplified(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             server = create_server(state_root=tmpdir)
             tools = asyncio.run(server.list_tools())
-            attach_tool = next(t for t in tools if t.name == "session_attach")
-            schema_props = attach_tool.inputSchema.get("properties", {})
-            self.assertIn("new_tab", schema_props)
+            start_tool = next(t for t in tools if t.name == "session_start")
+            props = start_tool.inputSchema.get("properties", {})
+            # New first-class proxy + managed-profile surface.
+            self.assertIn("proxy", props)
+            self.assertIn("profile", props)
+            self.assertIn("headless", props)
+            # Removed clone/attach/raw-profile knobs.
+            for gone in (
+                "user_data_dir",
+                "cookie_name",
+                "clone_strategy",
+                "duplicate_user_data_dir",
+                "profile_directory",
+            ):
+                self.assertNotIn(gone, props)
 
 
 if __name__ == "__main__":

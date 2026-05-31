@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -10,42 +11,50 @@ import signal
 from pathlib import Path
 from typing import Any
 
+from .proxy import ProxyConfig
+
 logger = logging.getLogger(__name__)
 
 
 class BridgeBrowser:
-    """Thin wrapper around nodriver with launch/attach support."""
+    """Thin wrapper around nodriver that always launches a fresh browser.
+
+    This wrapper never attaches to an externally-running browser: every
+    instance owns the Chromium process it spawned, so teardown can safely stop
+    (and, if wedged, force-kill) exactly that process and nothing the user is
+    running themselves.
+    """
 
     def __init__(
         self,
         *,
         headless: bool = False,
-        connect_host: str | None = None,
-        connect_port: int | None = None,
         user_data_dir: str | None = None,
         browser_args: list[str] | None = None,
         browser_executable_path: str | None = None,
         sandbox: bool = True,
-        attach_open_new_tab: bool = True,
+        proxy: ProxyConfig | None = None,
     ):
         self.headless = headless
-        self.connect_host = connect_host
-        self.connect_port = connect_port
         self.user_data_dir = user_data_dir
         self.browser_args = list(browser_args or [])
         self.browser_executable_path = browser_executable_path
         self.sandbox = sandbox
-        self.attach_open_new_tab = attach_open_new_tab
+        self.proxy = proxy
+        self.timezone_id: str | None = None
+        self.proxy_exit_info: dict[str, Any] | None = None
         self.browser: Any = None
         self.tab: Any = None
-        self.attach_created_new_tab: bool = False
-        self.attach_main_tab_id: str | None = None
-        self.attach_active_tab_id: str | None = None
         self._cdp_network: Any = None
         self._cdp_storage: Any = None
         self._cdp_input: Any = None
         self._cdp_page: Any = None
-        self._owns_process: bool = False
+        self._cdp_fetch: Any = None
+        self._cdp_emulation: Any = None
+        self._proxy_auth_handler_tab: Any = None
+        self._proxy_request_paused_handler: Any = None
+        self._proxy_auth_required_handler: Any = None
+        self._proxy_fetch_enabled: bool = False
         self._dialog_config: dict[str, Any] | None = None
         self._dialog_events: list[dict[str, Any]] = []
         self._dialog_handler_tab: Any = None
@@ -78,9 +87,11 @@ class BridgeBrowser:
         await self.close()
 
     async def start(self) -> None:
-        """Start a browser or attach to an existing debugger endpoint."""
+        """Launch a fresh, owned browser process."""
         try:
             import nodriver as uc
+            import nodriver.cdp.emulation as cdp_emulation
+            import nodriver.cdp.fetch as cdp_fetch
             import nodriver.cdp.input_ as cdp_input
             import nodriver.cdp.network as cdp_network
             import nodriver.cdp.page as cdp_page
@@ -97,123 +108,82 @@ class BridgeBrowser:
         self._cdp_storage = cdp_storage
         self._cdp_input = cdp_input
         self._cdp_page = cdp_page
+        self._cdp_fetch = cdp_fetch
+        self._cdp_emulation = cdp_emulation
 
-        attach_mode = self.connect_host is not None and self.connect_port is not None
-        self._owns_process = not attach_mode
+        config_kwargs: dict[str, Any] = {
+            "headless": self.headless,
+            "sandbox": self.sandbox,
+        }
+        if self.user_data_dir:
+            config_kwargs["user_data_dir"] = self.user_data_dir
+        if self.browser_executable_path:
+            config_kwargs["browser_executable_path"] = self.browser_executable_path
 
-        if attach_mode:
-            try:
-                self.browser = await uc.start(host=self.connect_host, port=self.connect_port)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Failed to connect to browser at {self.connect_host}:{self.connect_port}. "
-                    "Confirm the target browser was launched with --remote-debugging-port and is reachable."
-                ) from exc
-        else:
-            config_kwargs: dict[str, Any] = {
-                "headless": self.headless,
-                "sandbox": self.sandbox,
-            }
-            if self.user_data_dir:
-                config_kwargs["user_data_dir"] = self.user_data_dir
-            if self.browser_executable_path:
-                config_kwargs["browser_executable_path"] = self.browser_executable_path
+        merged_args: list[str] = list(self.browser_args)
+        if self.headless:
+            merged_args.append("--window-size=1920,1080")
+        if self.proxy is not None and not any(
+            arg.startswith("--proxy-server=") for arg in merged_args
+        ):
+            merged_args.append(self.proxy.proxy_server_arg())
+        if merged_args:
+            config_kwargs["browser_args"] = merged_args
 
-            merged_args: list[str] = list(self.browser_args)
-            if self.headless:
-                merged_args.append("--window-size=1920,1080")
-            if merged_args:
-                config_kwargs["browser_args"] = merged_args
+        # Deliberately NO sandbox-disable fallback. A browser launched with
+        # --no-sandbox is trivially fingerprinted by anti-bot systems (and the
+        # OS shows the "unsupported command-line flag" banner), so silently
+        # retrying with the sandbox off would hand back a browser that is worse
+        # than useless for stealth automation. If the sandboxed launch fails we
+        # fail loudly and let the caller fix the real problem.
+        try:
+            self.browser = await uc.start(**config_kwargs)
+        except Exception as exc:
+            raise RuntimeError(
+                "Failed to start the browser process. The sandbox is kept enabled "
+                "by design (a --no-sandbox browser is easily detected), so there is "
+                "no automatic unsandboxed retry. Confirm a Chromium-based browser is "
+                "installed and launchable, that no conflicting instance is using the "
+                "same user-data-dir, and that the latest nodriver-reforged dependency "
+                "is installed in this MCP environment."
+            ) from exc
 
-            try:
-                self.browser = await uc.start(**config_kwargs)
-            except Exception as primary_exc:
-                logger.warning(
-                    "Primary browser startup failed (%s). Retrying with sandbox disabled.",
-                    primary_exc,
-                )
-                try:
-                    retry_kwargs = dict(config_kwargs)
-                    if retry_kwargs.get("sandbox", True):
-                        retry_kwargs["sandbox"] = False
-                    self.browser = await uc.start(**retry_kwargs)
-                except Exception as retry_exc:
-                    raise RuntimeError(
-                        "Failed to start browser. Ensure the latest nodriver-reforged "
-                        "dependency is installed in this MCP environment."
-                    ) from retry_exc
-
-        main_tab = getattr(self.browser, "main_tab", None)
-        self.attach_main_tab_id = self._tab_id(main_tab) if main_tab is not None else None
-
-        if attach_mode and self.attach_open_new_tab:
-            try:
-                created = await self.browser.get(url="about:blank", new_tab=True)
-                try:
-                    await created.activate()
-                except Exception:
-                    pass
-                self.tab = created
-                self.attach_created_new_tab = True
-            except Exception as exc:
-                logger.warning(
-                    "Could not open a fresh tab on attach (%s). Falling back to main_tab.",
-                    exc,
-                )
-                self.tab = main_tab
-        else:
-            self.tab = main_tab
-
-        self.attach_active_tab_id = self._tab_id(self.tab) if self.tab is not None else None
+        self.tab = getattr(self.browser, "main_tab", None)
         await asyncio.sleep(1.2)
 
-        if self._owns_process:
-            await self._inject_stealth_script()
-            if self.headless:
-                await self._apply_headless_user_agent()
+        await self._inject_stealth_script()
+        if self.headless:
+            await self._apply_headless_user_agent()
+        await self._ensure_proxy_auth_handler()
 
     async def close(self) -> None:
         if self.browser is None:
             return
         try:
-            if (
-                not self._owns_process
-                and self.attach_created_new_tab
-                and self.tab is not None
-            ):
-                try:
-                    await self.tab.close()
-                except Exception as exc:
-                    logger.debug("Could not close attach-created tab cleanly: %s", exc)
-            if self._owns_process:
-                try:
-                    self.browser.stop()
-                except Exception as exc:
-                    logger.warning("Browser.stop() raised: %s", exc)
-                stopped_marker = getattr(self.browser, "stopped", None)
-                stopped = False
-                if callable(stopped_marker):
-                    for _ in range(20):
-                        try:
-                            if bool(stopped_marker()):
-                                stopped = True
-                                break
-                        except Exception:
+            try:
+                self.browser.stop()
+            except Exception as exc:
+                logger.warning("Browser.stop() raised: %s", exc)
+            stopped_marker = getattr(self.browser, "stopped", None)
+            stopped = False
+            if callable(stopped_marker):
+                for _ in range(20):
+                    try:
+                        if bool(stopped_marker()):
+                            stopped = True
                             break
-                        await asyncio.sleep(0.1)
-                else:
-                    await asyncio.sleep(0.5)
-                if not stopped:
-                    # Browser.stop() did not terminate the process within the
-                    # grace window; force-kill so we never leak a wedged process.
-                    self._force_kill_process()
+                    except Exception:
+                        break
+                    await asyncio.sleep(0.1)
+            else:
+                await asyncio.sleep(0.5)
+            if not stopped:
+                # Browser.stop() did not terminate the process within the
+                # grace window; force-kill so we never leak a wedged process.
+                self._force_kill_process()
         finally:
             self.browser = None
             self.tab = None
-            self._owns_process = False
-            self.attach_created_new_tab = False
-            self.attach_main_tab_id = None
-            self.attach_active_tab_id = None
             self._dialog_config = None
             self._dialog_events = []
             self._dialog_handler_tab = None
@@ -237,6 +207,76 @@ class BridgeBrowser:
             self._network_capture_response_handler = None
             self._network_capture_failed_handler = None
             self._network_capture_finished_handler = None
+            self._proxy_auth_handler_tab = None
+            self._proxy_request_paused_handler = None
+            self._proxy_auth_required_handler = None
+            self._proxy_fetch_enabled = False
+            self.timezone_id = None
+            self.proxy_exit_info = None
+
+    async def _ensure_proxy_auth_handler(self) -> None:
+        """Answer proxy 407 challenges for authenticated HTTP(S) proxies.
+
+        Chromium has no command-line way to pass proxy credentials, so we drive
+        the standard ``Fetch.authRequired`` challenge flow over CDP. Enabling
+        the Fetch domain pauses every request, so we must also resume each one
+        via ``continueRequest``. This is a no-op unless an authenticated proxy
+        is configured.
+        """
+        proxy = self.proxy
+        if proxy is None or not proxy.has_auth or not self.tab:
+            return
+        tab = self.tab
+        if self._proxy_auth_handler_tab is tab and self._proxy_fetch_enabled:
+            return
+        cdp_fetch = self._cdp_fetch
+
+        if self._proxy_auth_handler_tab is not None and self._proxy_auth_handler_tab is not tab:
+            try:
+                if self._proxy_request_paused_handler is not None:
+                    self._proxy_auth_handler_tab.remove_handler(
+                        cdp_fetch.RequestPaused, self._proxy_request_paused_handler
+                    )
+                if self._proxy_auth_required_handler is not None:
+                    self._proxy_auth_handler_tab.remove_handler(
+                        cdp_fetch.AuthRequired, self._proxy_auth_required_handler
+                    )
+            except Exception:
+                pass
+
+        username = proxy.username or ""
+        password = proxy.password or ""
+
+        async def _on_request_paused(event: Any) -> None:
+            try:
+                await tab.send(cdp_fetch.continue_request(request_id=event.request_id))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Fetch.continueRequest failed: %s", exc)
+
+        async def _on_auth_required(event: Any) -> None:
+            response = cdp_fetch.AuthChallengeResponse(
+                response="ProvideCredentials",
+                username=username,
+                password=password,
+            )
+            try:
+                await tab.send(
+                    cdp_fetch.continue_with_auth(
+                        request_id=event.request_id,
+                        auth_challenge_response=response,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Fetch.continueWithAuth failed: %s", exc)
+
+        tab.add_handler(cdp_fetch.RequestPaused, _on_request_paused)
+        tab.add_handler(cdp_fetch.AuthRequired, _on_auth_required)
+        await tab.send(cdp_fetch.enable(handle_auth_requests=True))
+        self._proxy_auth_handler_tab = tab
+        self._proxy_request_paused_handler = _on_request_paused
+        self._proxy_auth_required_handler = _on_auth_required
+        self._proxy_fetch_enabled = True
+        logger.info("Enabled proxy auth challenge handler for %s", proxy.redacted())
 
     def _force_kill_process(self) -> None:
         """Best-effort SIGKILL of the underlying browser process.
@@ -276,21 +316,181 @@ class BridgeBrowser:
         await self.tab.send(self._cdp_page.add_script_to_evaluate_on_new_document(source=script))
 
     async def _apply_headless_user_agent(self) -> None:
-        """Replace HeadlessChrome token in headless mode."""
+        """Strip the ``HeadlessChrome`` token *and* keep client hints consistent.
+
+        Overriding only ``navigator.userAgent`` leaves the User-Agent Client
+        Hints (``navigator.userAgentData``) still advertising ``HeadlessChrome``,
+        which detectors flag as an inconsistency. We read the browser's own
+        high-entropy hints, rewrite the headless brand, and push both the clean
+        UA string and matching metadata, then reinforce the UA string via a JS
+        override on new documents.
+        """
         try:
             current_ua = await self.tab.evaluate("navigator.userAgent")
-            if not isinstance(current_ua, str) or "HeadlessChrome" not in current_ua:
-                return
-            clean_ua = current_ua.replace("HeadlessChrome", "Chrome")
-            await self.tab.send(self._cdp_network.set_user_agent_override(user_agent=clean_ua))
-            logger.info("Applied headless-safe user agent override.")
+        except Exception as exc:
+            logger.warning("Could not read headless user-agent: %s", exc)
+            return
+        if not isinstance(current_ua, str) or "Headless" not in current_ua:
+            return
+        clean_ua = current_ua.replace("HeadlessChrome", "Chrome")
+
+        metadata = None
+        hints = await self._read_client_hints()
+        if hints:
+            try:
+                metadata = self._build_ua_metadata(hints)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Could not build client-hints metadata: %s", exc)
+
+        try:
+            if metadata is not None:
+                await self.tab.send(
+                    self._cdp_network.set_user_agent_override(
+                        user_agent=clean_ua, user_agent_metadata=metadata
+                    )
+                )
+            else:
+                await self.tab.send(self._cdp_network.set_user_agent_override(user_agent=clean_ua))
         except Exception as exc:
             logger.warning("Could not override headless user-agent: %s", exc)
+            return
+
+        try:
+            await self.add_script_on_new_document(
+                "Object.defineProperty(navigator, 'userAgent', "
+                f"{{get: () => {json.dumps(clean_ua)}, configurable: true}});"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Could not inject UA new-document script: %s", exc)
+        logger.info(
+            "Applied headless-safe user agent override (client hints %s).",
+            "aligned" if metadata is not None else "unavailable",
+        )
+
+    async def _read_client_hints(self) -> dict[str, Any] | None:
+        """Read the browser's own high-entropy User-Agent Client Hints."""
+        script = """
+        (async () => {
+          const uad = navigator.userAgentData;
+          if (!uad) return null;
+          let high = {};
+          try {
+            high = await uad.getHighEntropyValues([
+              "platform", "platformVersion", "architecture",
+              "bitness", "model", "fullVersionList"
+            ]);
+          } catch (e) {}
+          return {
+            brands: (uad.brands || []).map(b => ({brand: b.brand, version: b.version})),
+            mobile: !!uad.mobile,
+            platform: high.platform || uad.platform || "",
+            platformVersion: high.platformVersion || "",
+            architecture: high.architecture || "",
+            bitness: high.bitness || "",
+            model: high.model || "",
+            fullVersionList: (high.fullVersionList || []).map(b => ({brand: b.brand, version: b.version})),
+          };
+        })()
+        """
+        try:
+            data = await self.tab.evaluate(script, await_promise=True, return_by_value=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Could not read client hints: %s", exc)
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _build_ua_metadata(self, hints: dict[str, Any]) -> Any:
+        """Build a CDP ``UserAgentMetadata`` with the headless brand rewritten."""
+        emu = self._cdp_emulation
+
+        def _brand_list(raw: Any) -> list[Any]:
+            out: list[Any] = []
+            for item in raw or []:
+                brand = str(item.get("brand", "") or "")
+                if not brand:
+                    continue
+                brand = brand.replace("HeadlessChrome", "Google Chrome")
+                out.append(
+                    emu.UserAgentBrandVersion(brand=brand, version=str(item.get("version", "") or ""))
+                )
+            return out
+
+        brands = _brand_list(hints.get("brands"))
+        full_version_list = _brand_list(hints.get("fullVersionList"))
+        return emu.UserAgentMetadata(
+            platform=str(hints.get("platform", "") or ""),
+            platform_version=str(hints.get("platformVersion", "") or ""),
+            architecture=str(hints.get("architecture", "") or ""),
+            model=str(hints.get("model", "") or ""),
+            mobile=bool(hints.get("mobile", False)),
+            brands=brands or None,
+            full_version_list=full_version_list or None,
+            bitness=str(hints.get("bitness", "") or ""),
+        )
+
+    async def apply_timezone_override(self, timezone_id: str) -> None:
+        """Pin the JS timezone via CDP ``Emulation.setTimezoneOverride``."""
+        if not timezone_id or self.tab is None or self._cdp_emulation is None:
+            return
+        try:
+            await self.tab.send(self._cdp_emulation.set_timezone_override(timezone_id=timezone_id))
+            self.timezone_id = timezone_id
+            logger.info("Applied timezone override: %s", timezone_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not set timezone override (%s): %s", timezone_id, exc)
+
+    async def align_timezone_to_proxy(self, *, timeout_seconds: float = 20.0) -> dict[str, Any] | None:
+        """Detect the proxy egress timezone and pin it in the browser.
+
+        With a proxy set, the page's JS timezone still reflects the host machine
+        unless we override it; that mismatch (browser TZ vs. IP TZ) is a strong
+        bot signal. We query ``api.ipapi.is`` *through the proxy* (so the result
+        reflects the egress IP), apply ``setTimezoneOverride``, then return to a
+        blank page. Best-effort: a dead proxy or parse failure is non-fatal.
+        """
+        if self.proxy is None or self.tab is None:
+            return None
+
+        async def _detect() -> dict[str, Any] | None:
+            await self.goto("https://api.ipapi.is/", wait_seconds=0.4)
+            raw = await self.tab.evaluate(
+                "document.body && (document.body.innerText || document.body.textContent)"
+            )
+            if not isinstance(raw, str) or not raw.strip():
+                return None
+            return json.loads(raw)
+
+        data: dict[str, Any] | None = None
+        try:
+            data = await asyncio.wait_for(_detect(), timeout=max(5.0, float(timeout_seconds)))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Proxy timezone detection failed: %s", exc)
+
+        info: dict[str, Any] | None = None
+        if isinstance(data, dict):
+            location = data.get("location") or {}
+            timezone_id = location.get("timezone")
+            info = {
+                "exit_ip": data.get("ip"),
+                "timezone": timezone_id,
+                "city": location.get("city"),
+                "country": location.get("country"),
+            }
+            if isinstance(timezone_id, str) and timezone_id:
+                await self.apply_timezone_override(timezone_id)
+            self.proxy_exit_info = info
+
+        try:
+            await self.goto("about:blank", wait_seconds=0.0)
+        except Exception:  # noqa: BLE001
+            pass
+        return info
 
     async def add_script_on_new_document(self, source: str) -> None:
         await self.tab.send(self._cdp_page.add_script_to_evaluate_on_new_document(source=source))
 
     async def goto(self, url: str, *, wait_seconds: float = 0.0) -> None:
+        await self._ensure_proxy_auth_handler()
         await self.tab.get(url)
         if wait_seconds > 0:
             await asyncio.sleep(wait_seconds)
