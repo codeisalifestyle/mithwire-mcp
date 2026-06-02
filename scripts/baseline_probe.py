@@ -453,16 +453,25 @@ class RawChrome:
 # ---------------------------------------------------------------------------
 
 class BridgeDriver:
-    def __init__(self, *, headless: bool, proxy: str | None) -> None:
+    def __init__(self, *, headless: bool, proxy: str | None, fingerprint: dict | None = None) -> None:
         self.headless = headless
         self.proxy = proxy
+        # None / empty -> no-spoof (BridgeBrowser skips apply_fingerprint when the
+        # config is empty). A non-empty dict turns this into the spoof case.
+        self.fingerprint = fingerprint
         self.b: Any = None
 
     async def start(self) -> None:
         from nodriver_reforged_browser_mcp.browser import BridgeBrowser
         from nodriver_reforged_browser_mcp.proxy import parse_proxy
 
-        self.b = BridgeBrowser(headless=self.headless, proxy=parse_proxy(self.proxy))
+        kwargs: dict[str, Any] = {"headless": self.headless, "proxy": parse_proxy(self.proxy)}
+        if self.fingerprint:
+            # Imported from the same checkout as BridgeBrowser (honors --package-dir).
+            from nodriver_reforged_browser_mcp.fingerprint import FingerprintConfig
+
+            kwargs["fingerprint"] = FingerprintConfig.from_dict(self.fingerprint)
+        self.b = BridgeBrowser(**kwargs)
         await self.b.start()
 
     async def navigate(self, url: str, wait: float) -> None:
@@ -620,17 +629,29 @@ async def _await_json_response(
     return None
 
 
-async def run(driver_kind: str, headless: bool, proxy: str | None, label: str, *, skip_fpcom: bool = False) -> dict:
+async def run(
+    driver_kind: str,
+    headless: bool,
+    proxy: str | None,
+    label: str,
+    *,
+    skip_fpcom: bool = False,
+    fingerprint: dict | None = None,
+) -> dict:
+    # Clean Chrome (raw) can't spoof; spoofing is a bridge-only dimension.
+    spoof = bool(fingerprint) and driver_kind == "bridge"
     if driver_kind == "raw":
         driver: Any = RawChrome(headless=headless)
     else:
-        driver = BridgeDriver(headless=headless, proxy=proxy)
+        driver = BridgeDriver(headless=headless, proxy=proxy, fingerprint=fingerprint)
 
     result: dict[str, Any] = {
         "label": label,
         "driver": driver_kind,
         "headless": headless,
         "proxy": bool(proxy),
+        "spoof": spoof,
+        "fingerprint": fingerprint if spoof else None,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "probes": {},
     }
@@ -732,7 +753,11 @@ def compare(paths: list[str]) -> None:
     results = []
     for p in paths:
         data = json.loads(Path(p).read_text())
-        results.append((data.get("label", p), _flatten(data)))
+        # Make the spoof axis explicit in the column label so a no-spoof column
+        # is never mistaken for a custom-fingerprint one.
+        tag = "spoof" if data.get("spoof") else "no-spoof"
+        label = f"{data.get('label', p)} [{tag}]"
+        results.append((label, _flatten(data)))
     keys: list[str] = []
     for _, flat in results:
         for k in flat:
@@ -768,6 +793,16 @@ def main() -> None:
         "commercial API and adds ~18s).",
     )
     ap.add_argument(
+        "--fingerprint",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to a JSON FingerprintConfig (see fingerprint.py from_dict). "
+            "Turns a 'bridge' run into the SPOOF case (custom device identity). "
+            "Omit for the no-spoof baseline. Ignored by --driver raw."
+        ),
+    )
+    ap.add_argument(
         "--package-dir",
         default=None,
         help=(
@@ -789,8 +824,19 @@ def main() -> None:
     if args.package_dir:
         sys.path.insert(0, str(Path(args.package_dir).resolve()))
 
+    fingerprint = None
+    if args.fingerprint:
+        fingerprint = json.loads(Path(args.fingerprint).read_text())
+
     result = asyncio.run(
-        run(args.driver, args.headless, args.proxy, args.label, skip_fpcom=args.skip_fpcom)
+        run(
+            args.driver,
+            args.headless,
+            args.proxy,
+            args.label,
+            skip_fpcom=args.skip_fpcom,
+            fingerprint=fingerprint,
+        )
     )
     text = json.dumps(result, indent=2, default=str)
     if args.out:
