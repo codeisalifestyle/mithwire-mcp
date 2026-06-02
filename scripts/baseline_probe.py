@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -221,6 +222,47 @@ IPAPI_PROBE = r"""
     asn: (j.asn || {}).descr || (j.asn || {}).org || null,
     company: (j.company || {}).name || null,
   };
+})()
+"""
+
+# Deterministic WebRTC leak probe. CreepJS's webrtcLeakIp reads whatever ICE has
+# gathered *so far*, which races our snapshot. Here we drive our OWN
+# RTCPeerConnection against a public STUN server and WAIT for ICE gathering to
+# actually complete (or a hard 9s cap) before reporting every candidate address
+# + type. Behind a proxy with disable_non_proxied_udp, STUN (UDP to the public
+# internet) should be blocked, so NO srflx/public candidate should ever appear —
+# only an mDNS `.local` host candidate. A public IP that is not the proxy egress
+# is a real-IP leak. Runs in a secure https context (evaluated on api.ipapi.is).
+WEBRTC_PROBE = r"""
+(async () => {
+  if (typeof RTCPeerConnection === 'undefined') return { ready: false, error: 'no-rtc' };
+  const cands = [];
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  try {
+    pc.createDataChannel('probe');
+    await pc.setLocalDescription(await pc.createOffer());
+  } catch (e) {
+    try { pc.close(); } catch (_) {}
+    return { ready: false, error: 'offer-failed:' + String(e) };
+  }
+  let complete = false;
+  await new Promise((resolve) => {
+    const done = () => resolve();
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState === 'complete') { complete = true; done(); }
+    };
+    pc.onicecandidate = (e) => {
+      if (!e.candidate) { complete = true; done(); return; }
+      const c = e.candidate.candidate || '';
+      const parts = c.split(' ');
+      const addr = parts[4] || '';
+      const typ = (c.match(/ typ (\S+)/) || [])[1] || '';
+      cands.push({ addr, typ });
+    };
+    setTimeout(done, 9000);
+  });
+  try { pc.close(); } catch (_) {}
+  return { ready: true, gatheringComplete: complete, candidates: cands };
 })()
 """
 
@@ -694,6 +736,11 @@ async def run(
             result["probes"][key] = _parse(
                 await _guard(key, driver.evaluate(_wrap(probe)), 20)
             )
+        # Deterministic WebRTC leak check on the current (https) page, after ICE
+        # gathering completes -- independent of CreepJS's racy snapshot.
+        result["probes"]["webrtc"] = _parse(
+            await _guard("webrtc", driver.evaluate(_wrap(WEBRTC_PROBE)), 15)
+        )
         # fingerprint.com: sourced from its server response, captured passively.
         if not skip_fpcom:
             key, url, needle, wait, body_to = FP_CAPTURE
@@ -704,6 +751,22 @@ async def run(
     finally:
         await _guard("close", driver.close(), 20)
     return result
+
+
+def _classify_addr(addr: str) -> str:
+    """Bucket an ICE candidate address: mdns / private / public / other."""
+    a = (addr or "").strip().lower()
+    if not a:
+        return "empty"
+    if a.endswith(".local") or "mdns" in a:
+        return "mdns"
+    if ":" in a:  # IPv6
+        return "private" if a.startswith(("fe80", "fc", "fd")) else "public"
+    if re.match(r"^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)", a):
+        return "private"
+    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", a):
+        return "public"
+    return "other"
 
 
 def _flatten(result: dict) -> dict[str, Any]:
@@ -771,14 +834,30 @@ def _flatten(result: dict) -> dict[str, Any]:
         # timezone. A mismatch (browser=host TZ, IP=egress TZ) is the classic
         # proxy bot tell that Feature B exists to close.
         out["tz_match"] = "MATCH" if browser_tz == egress_tz else f"MISMATCH {browser_tz}!={egress_tz}"
-    # WebRTC leak: the STUN candidate CreepJS observed must be the egress
-    # (proxy) IP, never the host's real IP. Only meaningful behind a proxy.
-    if result.get("proxy"):
-        leak = creep.get("webrtcLeakIp") if isinstance(creep, dict) else None
-        if leak:
-            out["webrtc_ip"] = "egress-ok" if leak == ip.get("ip") else f"LEAK? {leak}"
+    # WebRTC leak verdict from the dedicated, post-gather probe (deterministic;
+    # independent of CreepJS's racy snapshot). Behind a proxy the ONLY public IP
+    # that may legitimately appear is the egress; the host's real IP must not.
+    wrtc = result.get("probes", {}).get("webrtc") or {}
+    if isinstance(wrtc, dict) and wrtc.get("ready"):
+        egress = ip.get("ip") if isinstance(ip, dict) else None
+        publics: list[str] = []
+        for c in wrtc.get("candidates") or []:
+            addr = (c.get("addr") or "") if isinstance(c, dict) else ""
+            if _classify_addr(addr) == "public" and addr not in publics:
+                publics.append(addr)
+        leaks = [a for a in publics if a != egress]
+        out["webrtc_complete"] = wrtc.get("gatheringComplete")
+        out["webrtc_publicIPs"] = publics or "none"
+        if leaks:
+            out["webrtc_leak"] = f"REAL-IP-LEAK {leaks}"
+        elif publics:
+            out["webrtc_leak"] = "egress-only (ok)"
         else:
-            out["webrtc_ip"] = "none"
+            out["webrtc_leak"] = "no-public (ok)"
+    elif isinstance(wrtc, dict) and wrtc:
+        out["webrtc_leak"] = (
+            wrtc.get("error") or wrtc.get("__timeout__") or wrtc.get("__error__") or "n/a"
+        )
     fp = result.get("probes", {}).get("fingerprintcom") or {}
     if isinstance(fp, dict):
         if fp.get("ready"):
