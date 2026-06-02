@@ -1145,23 +1145,28 @@ class BridgeBrowser:
             % (vendor, renderer)
         )
 
-    # Shared preamble: a Function.prototype.toString shim so any function we
-    # patch reports `function <name>() { [native code] }` even via
-    # Function.prototype.toString.call(fn) (which bypasses own-property
-    # toString). Without this, every override below is a one-line giveaway for
-    # lie-detectors like CreepJS. The shim is registered in its own map so it,
-    # too, stringifies as native.
+    # Shared preamble: makes any function we patch report
+    # `function <name>() { [native code] }` via a LOCAL own-`toString` per fn.
+    #
+    # History: this used to install a GLOBAL `Function.prototype.toString` shim
+    # (backed by a WeakMap) so even `Function.prototype.toString.call(fn)` read
+    # native. That defeats the strongest probe, BUT globally reassigning
+    # `Function.prototype.toString` is ITSELF a strong CreepJS tell -- it
+    # cascaded into ~9 component "lies" (Timezone/WebGL/Canvas/Audio/Math/...),
+    # taking a spoofed session from 1 lie to 10 (measured). A local own-toString
+    # leaves the global pristine: `fn.toString()` / `fn + ''` read native (the
+    # common checks) while only the rarer `Function.prototype.toString.call(fn)`
+    # of a specific patched member can still reveal it -- an accepted depth-layer
+    # gap, far cheaper than tripping 9 lies. Call sites are unchanged
+    # (`__nrMask(fn, name)`).
     _NATIVE_MASK_PREAMBLE = """
-        const __nrNative = Function.prototype.toString;
-        const __nrMap = new WeakMap();
-        const __nrMask = (fn, name) => { try { __nrMap.set(fn, name); } catch (e) {} return fn; };
-        const __nrTS = function toString() {
-          const n = __nrMap.get(this);
-          if (n) return "function " + n + "() { [native code] }";
-          return __nrNative.call(this);
+        const __nrMask = (fn, name) => {
+          try {
+            const ts = function toString() { return "function " + name + "() { [native code] }"; };
+            Object.defineProperty(fn, "toString", { value: ts, configurable: true, writable: true });
+          } catch (e) {}
+          return fn;
         };
-        __nrMap.set(__nrTS, "toString");
-        try { Function.prototype.toString = __nrTS; } catch (e) {}
     """
 
     def _fingerprint_document_js(self, fp: FingerprintConfig) -> str | None:
