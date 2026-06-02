@@ -453,12 +453,23 @@ class RawChrome:
 # ---------------------------------------------------------------------------
 
 class BridgeDriver:
-    def __init__(self, *, headless: bool, proxy: str | None, fingerprint: dict | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        headless: bool,
+        proxy: str | None,
+        fingerprint: dict | None = None,
+        align_to_proxy: bool = False,
+    ) -> None:
         self.headless = headless
         self.proxy = proxy
         # None / empty -> no-spoof (BridgeBrowser skips apply_fingerprint when the
         # config is empty). A non-empty dict turns this into the spoof case.
         self.fingerprint = fingerprint
+        # When set (and a proxy is configured), exercise the REAL runtime
+        # behavior: detect the egress timezone through the proxy and pin it.
+        self.align_to_proxy = align_to_proxy
+        self.align_info: Any = None
         self.b: Any = None
 
     async def start(self) -> None:
@@ -473,6 +484,12 @@ class BridgeDriver:
             kwargs["fingerprint"] = FingerprintConfig.from_dict(self.fingerprint)
         self.b = BridgeBrowser(**kwargs)
         await self.b.start()
+        # Mirror runtime.session_start: with a proxy set, align the browser
+        # timezone to the egress IP before any real navigation. Calling the
+        # production method directly (not a reimplementation) keeps the test
+        # faithful to shipped behavior.
+        if self.align_to_proxy and self.proxy:
+            self.align_info = await self.b.align_timezone_to_proxy()
 
     async def navigate(self, url: str, wait: float) -> None:
         await self.b.goto(url, wait_seconds=wait)
@@ -637,13 +654,19 @@ async def run(
     *,
     skip_fpcom: bool = False,
     fingerprint: dict | None = None,
+    align_to_proxy: bool = False,
 ) -> dict:
     # Clean Chrome (raw) can't spoof; spoofing is a bridge-only dimension.
     spoof = bool(fingerprint) and driver_kind == "bridge"
+    # Proxy->identity alignment is also bridge-only (raw Chrome has no relay /
+    # timezone override), and only meaningful when a proxy is actually set.
+    align = bool(align_to_proxy) and driver_kind == "bridge" and bool(proxy)
     if driver_kind == "raw":
         driver: Any = RawChrome(headless=headless)
     else:
-        driver = BridgeDriver(headless=headless, proxy=proxy, fingerprint=fingerprint)
+        driver = BridgeDriver(
+            headless=headless, proxy=proxy, fingerprint=fingerprint, align_to_proxy=align
+        )
 
     result: dict[str, Any] = {
         "label": label,
@@ -651,11 +674,14 @@ async def run(
         "headless": headless,
         "proxy": bool(proxy),
         "spoof": spoof,
+        "align_to_proxy": align,
         "fingerprint": fingerprint if spoof else None,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "probes": {},
     }
-    await _guard("start", driver.start(), 45)
+    await _guard("start", driver.start(), 60)
+    # Record what the alignment step detected (egress ip/tz/city/country).
+    result["proxy_exit"] = getattr(driver, "align_info", None)
     try:
         for i, (key, url, wait, probe) in enumerate(SITES):
             await _guard(f"nav {key}", driver.navigate(url, wait), 40)
@@ -733,6 +759,26 @@ def _flatten(result: dict) -> dict[str, Any]:
             for k in ("is_proxy", "is_vpn", "is_datacenter", "is_tor", "is_abuser", "is_crawler", "is_mobile")
             if ip.get(k) is True
         ) or "none"
+    # --- Proxy -> identity alignment proof signals (Feature B) ---
+    out["align_on"] = result.get("align_to_proxy")
+    pexit = result.get("proxy_exit") or {}
+    if isinstance(pexit, dict) and pexit:
+        out["align_egress_tz"] = pexit.get("timezone")
+    browser_tz = nav.get("timezone") if isinstance(nav, dict) else None
+    egress_tz = ip.get("timezone") if isinstance(ip, dict) else None
+    if egress_tz:
+        # The money signal: browser Intl timezone must equal the egress IP's
+        # timezone. A mismatch (browser=host TZ, IP=egress TZ) is the classic
+        # proxy bot tell that Feature B exists to close.
+        out["tz_match"] = "MATCH" if browser_tz == egress_tz else f"MISMATCH {browser_tz}!={egress_tz}"
+    # WebRTC leak: the STUN candidate CreepJS observed must be the egress
+    # (proxy) IP, never the host's real IP. Only meaningful behind a proxy.
+    if result.get("proxy"):
+        leak = creep.get("webrtcLeakIp") if isinstance(creep, dict) else None
+        if leak:
+            out["webrtc_ip"] = "egress-ok" if leak == ip.get("ip") else f"LEAK? {leak}"
+        else:
+            out["webrtc_ip"] = "none"
     fp = result.get("probes", {}).get("fingerprintcom") or {}
     if isinstance(fp, dict):
         if fp.get("ready"):
@@ -803,6 +849,16 @@ def main() -> None:
         ),
     )
     ap.add_argument(
+        "--align-to-proxy",
+        action="store_true",
+        help=(
+            "Exercise Feature B: after start, call the real "
+            "browser.align_timezone_to_proxy() (same call runtime.session_start "
+            "makes) so the browser timezone is pinned to the egress IP. Requires "
+            "--proxy and --driver bridge; otherwise a no-op."
+        ),
+    )
+    ap.add_argument(
         "--package-dir",
         default=None,
         help=(
@@ -836,6 +892,7 @@ def main() -> None:
             args.label,
             skip_fpcom=args.skip_fpcom,
             fingerprint=fingerprint,
+            align_to_proxy=args.align_to_proxy,
         )
     )
     text = json.dumps(result, indent=2, default=str)
