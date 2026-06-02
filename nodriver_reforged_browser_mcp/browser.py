@@ -37,6 +37,7 @@ class BridgeBrowser:
         sandbox: bool = True,
         proxy: ProxyConfig | None = None,
         fingerprint: FingerprintConfig | None = None,
+        webrtc_leak_protection: str = "auto",
     ):
         self.headless = headless
         self.user_data_dir = user_data_dir
@@ -45,6 +46,20 @@ class BridgeBrowser:
         self.sandbox = sandbox
         self.proxy = proxy
         self.fingerprint = fingerprint or FingerprintConfig()
+        # WebRTC leak protection mode. An HTTP/SOCKS proxy cannot carry STUN/UDP,
+        # so WebRTC queries STUN over the physical NIC and the server-reflexive
+        # (srflx) candidate betrays the real public IP -- the #1 proxy leak, and
+        # one no Chromium flag reliably closes. Modes:
+        #   * "auto" (default): filter public, non-mDNS ICE candidates ONLY when a
+        #     proxy is set (a direct connection's public IP is legitimate, so
+        #     hiding it would be the anomaly). Leaves mDNS host candidates intact,
+        #     so the page sees the same clean set a privacy/STUN-firewalled real
+        #     browser shows.
+        #   * "filter": filter public candidates regardless of proxy.
+        #   * "disable": remove RTCPeerConnection entirely (no leak, but WebRTC
+        #     absence is itself a mild tell and breaks legitimate WebRTC use).
+        #   * "off": no WebRTC tampering.
+        self.webrtc_leak_protection = (webrtc_leak_protection or "auto").strip().lower()
         self.timezone_id: str | None = None
         self.proxy_exit_info: dict[str, Any] | None = None
         self._page_domain_tab: Any | None = None
@@ -204,6 +219,7 @@ class BridgeBrowser:
         await asyncio.sleep(1.2)
 
         await self._inject_stealth_script()
+        await self._inject_webrtc_protection()
         if self.headless:
             await self._apply_headless_user_agent()
         if not self.fingerprint.is_empty:
@@ -453,6 +469,174 @@ class BridgeBrowser:
             window.chrome = window.chrome || { runtime: {} };
         """
         await self.tab.send(self._cdp_page.add_script_to_evaluate_on_new_document(source=script))
+
+    def _resolve_webrtc_action(self) -> str | None:
+        """Decide the effective WebRTC action for this session ('filter'/'disable'/None)."""
+        mode = self.webrtc_leak_protection
+        if mode == "off":
+            return None
+        if mode == "disable":
+            return "disable"
+        if mode == "filter":
+            return "filter"
+        # "auto" (and any unknown value): protect only when proxied, since a
+        # direct connection's public WebRTC candidate is the legitimate IP.
+        return "filter" if self.proxy is not None else None
+
+    async def _inject_webrtc_protection(self) -> None:
+        """Inject the WebRTC leak guard as an all-frames new-document script.
+
+        Runs before page scripts on every navigation/frame. Self-contained: it
+        bundles its own native-toString mask so the patched accessors/methods
+        stringify as native even when no fingerprint document JS is injected.
+        """
+        action = self._resolve_webrtc_action()
+        if action is None:
+            return
+        script = self._webrtc_protection_js(action)
+        try:
+            await self.tab.send(
+                self._cdp_page.add_script_to_evaluate_on_new_document(source=script)
+            )
+            logger.info("Injected WebRTC leak protection (mode=%s).", action)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not inject WebRTC leak protection: %s", exc)
+
+    def _webrtc_protection_js(self, action: str) -> str:
+        if action == "disable":
+            # Remove the constructors outright. WebRTC absence is a mild tell but
+            # cannot leak. Both the standard and webkit-prefixed names are cleared.
+            return """
+            (function () {
+              const drop = (name) => {
+                try { Object.defineProperty(window, name, { value: undefined, configurable: true }); }
+                catch (e) { try { delete window[name]; } catch (e2) {} }
+              };
+              drop('RTCPeerConnection');
+              drop('webkitRTCPeerConnection');
+              drop('mozRTCPeerConnection');
+              drop('RTCDataChannel');
+            })();
+            """
+        # action == "filter": drop public, non-mDNS ICE candidates so the real
+        # IP never reaches the page. We patch only RTCPeerConnection.prototype
+        # members that are NORMALLY own properties of that prototype (the
+        # onicecandidate accessor, the localDescription accessors, and
+        # createOffer/createAnswer), so no own-property tell is introduced.
+        #
+        # We deliberately do NOT use the global Function.prototype.toString mask
+        # (_NATIVE_MASK_PREAMBLE) here: this guard is ALWAYS-ON (no-spoof path),
+        # and globally reassigning Function.prototype.toString is itself a strong
+        # CreepJS tell that cascades into ~9 component "lies" (Timezone, WebGL,
+        # Canvas, Audio, Math, ...). Instead each replacement gets a light,
+        # local own-`toString` so `fn.toString()`/`fn + ''` read native, without
+        # touching the global. (Advanced Function.prototype.toString.call probing
+        # of these specific WebRTC members is an accepted depth-layer gap -- far
+        # cheaper than re-leaking the real IP or tripping 9 lies.)
+        return (
+            r"""
+            (function () {
+              const RTC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+              if (!RTC || !RTC.prototype || RTC.prototype.__nrRtcGuard) return;
+              const proto = RTC.prototype;
+              const __nrMask = (fn, name) => {
+                try {
+                  Object.defineProperty(fn, 'toString', {
+                    value: function toString() { return 'function ' + name + '() { [native code] }'; },
+                    configurable: true, writable: true,
+                  });
+                } catch (e) {}
+                return fn;
+              };
+              const isPublic = (addr) => {
+                if (!addr) return false;
+                addr = ('' + addr).toLowerCase();
+                if (addr.indexOf('.local') >= 0 || addr.indexOf('mdns') >= 0) return false;
+                if (addr.indexOf(':') >= 0) {
+                  return !(addr.indexOf('fe80') === 0 || addr.indexOf('fc') === 0 || addr.indexOf('fd') === 0);
+                }
+                if (/^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(addr)) return false;
+                return /^\d{1,3}(\.\d{1,3}){3}$/.test(addr);
+              };
+              const candAddr = (s) => { const p = ('' + s).split(' '); return p[4] || ''; };
+              const candBlocked = (cand) => {
+                try {
+                  const s = cand && (cand.candidate !== undefined ? cand.candidate : cand);
+                  return s ? isPublic(candAddr(s)) : false;
+                } catch (e) { return false; }
+              };
+              const scrubSdp = (sdp) => {
+                if (!sdp) return sdp;
+                return ('' + sdp).split('\r\n').filter((line) => {
+                  const i = line.indexOf('candidate:');
+                  if (i < 0) return true;
+                  return !isPublic(candAddr(line.slice(i + 'candidate:'.length)));
+                }).join('\r\n');
+              };
+              const wrapCb = (cb) => function (ev) {
+                try { if (ev && ev.candidate && candBlocked(ev.candidate)) return undefined; } catch (e) {}
+                return cb.apply(this, arguments);
+              };
+              // 1) onicecandidate accessor (own accessor on the prototype): wrap
+              //    the page's handler so srflx/public candidates are dropped.
+              try {
+                const od = Object.getOwnPropertyDescriptor(proto, 'onicecandidate');
+                if (od && typeof od.set === 'function') {
+                  const getter = function () { return od.get ? od.get.call(this) : null; };
+                  const setter = function (cb) {
+                    return od.set.call(this, typeof cb === 'function' ? wrapCb(cb) : cb);
+                  };
+                  __nrMask(getter, 'onicecandidate');
+                  __nrMask(setter, 'onicecandidate');
+                  Object.defineProperty(proto, 'onicecandidate', {
+                    configurable: true, enumerable: od.enumerable, get: getter, set: setter,
+                  });
+                }
+              } catch (e) {}
+              // 2) localDescription family: scrub candidate lines from any SDP a
+              //    page reads back after gathering.
+              ['localDescription', 'currentLocalDescription', 'pendingLocalDescription'].forEach((prop) => {
+                try {
+                  const d = Object.getOwnPropertyDescriptor(proto, prop);
+                  if (d && typeof d.get === 'function') {
+                    const getter = function () {
+                      const desc = d.get.call(this);
+                      if (!desc || !desc.sdp) return desc;
+                      try { return new RTCSessionDescription({ type: desc.type, sdp: scrubSdp(desc.sdp) }); }
+                      catch (e) { return desc; }
+                    };
+                    __nrMask(getter, prop);
+                    Object.defineProperty(proto, prop, {
+                      configurable: true, enumerable: d.enumerable, get: getter,
+                    });
+                  }
+                } catch (e) {}
+              });
+              // 3) createOffer/createAnswer (own methods): scrub the promise's SDP
+              //    so non-trickle offers carry no public candidate.
+              ['createOffer', 'createAnswer'].forEach((m) => {
+                try {
+                  const orig = proto[m];
+                  if (typeof orig !== 'function') return;
+                  const wrapped = function () {
+                    const r = orig.apply(this, arguments);
+                    if (r && typeof r.then === 'function') {
+                      return r.then((desc) => {
+                        try { if (desc && desc.sdp) return { type: desc.type, sdp: scrubSdp(desc.sdp) }; }
+                        catch (e) {}
+                        return desc;
+                      });
+                    }
+                    return r;
+                  };
+                  __nrMask(wrapped, m);
+                  proto[m] = wrapped;
+                } catch (e) {}
+              });
+              try { Object.defineProperty(proto, '__nrRtcGuard', { value: true }); } catch (e) {}
+            })();
+            """
+        )
 
     async def _apply_headless_user_agent(self) -> None:
         """Strip ``HeadlessChrome`` while keeping main-thread UA-CH populated.

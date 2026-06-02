@@ -502,9 +502,13 @@ class BridgeDriver:
         proxy: str | None,
         fingerprint: dict | None = None,
         align_to_proxy: bool = False,
+        webrtc: str | None = None,
     ) -> None:
         self.headless = headless
         self.proxy = proxy
+        # WebRTC leak-protection mode override (auto/filter/disable/off); None
+        # lets BridgeBrowser use its default ("auto" -> filter when proxied).
+        self.webrtc = webrtc
         # None / empty -> no-spoof (BridgeBrowser skips apply_fingerprint when the
         # config is empty). A non-empty dict turns this into the spoof case.
         self.fingerprint = fingerprint
@@ -519,6 +523,8 @@ class BridgeDriver:
         from nodriver_reforged_browser_mcp.proxy import parse_proxy
 
         kwargs: dict[str, Any] = {"headless": self.headless, "proxy": parse_proxy(self.proxy)}
+        if self.webrtc:
+            kwargs["webrtc_leak_protection"] = self.webrtc
         if self.fingerprint:
             # Imported from the same checkout as BridgeBrowser (honors --package-dir).
             from nodriver_reforged_browser_mcp.fingerprint import FingerprintConfig
@@ -697,6 +703,7 @@ async def run(
     skip_fpcom: bool = False,
     fingerprint: dict | None = None,
     align_to_proxy: bool = False,
+    webrtc: str | None = None,
 ) -> dict:
     # Clean Chrome (raw) can't spoof; spoofing is a bridge-only dimension.
     spoof = bool(fingerprint) and driver_kind == "bridge"
@@ -707,7 +714,8 @@ async def run(
         driver: Any = RawChrome(headless=headless)
     else:
         driver = BridgeDriver(
-            headless=headless, proxy=proxy, fingerprint=fingerprint, align_to_proxy=align
+            headless=headless, proxy=proxy, fingerprint=fingerprint,
+            align_to_proxy=align, webrtc=webrtc,
         )
 
     result: dict[str, Any] = {
@@ -717,6 +725,7 @@ async def run(
         "proxy": bool(proxy),
         "spoof": spoof,
         "align_to_proxy": align,
+        "webrtc_mode": webrtc,
         "fingerprint": fingerprint if spoof else None,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "probes": {},
@@ -928,6 +937,17 @@ def main() -> None:
         ),
     )
     ap.add_argument(
+        "--webrtc-mode",
+        choices=["auto", "filter", "disable", "off"],
+        default=None,
+        help=(
+            "Override BridgeBrowser's WebRTC leak-protection mode. Default (unset) "
+            "uses 'auto' (filter public ICE candidates when proxied). 'filter' "
+            "always filters; 'disable' removes RTCPeerConnection; 'off' disables "
+            "the guard (use to reproduce the raw leak). Bridge-only."
+        ),
+    )
+    ap.add_argument(
         "--align-to-proxy",
         action="store_true",
         help=(
@@ -972,6 +992,7 @@ def main() -> None:
             skip_fpcom=args.skip_fpcom,
             fingerprint=fingerprint,
             align_to_proxy=args.align_to_proxy,
+            webrtc=args.webrtc_mode,
         )
     )
     text = json.dumps(result, indent=2, default=str)

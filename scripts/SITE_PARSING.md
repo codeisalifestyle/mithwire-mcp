@@ -101,6 +101,45 @@ result to exist and never depend on guessing how long a site takes.
 - **Use:** confirm the proxy's apparent country/timezone match the spoofed
   `Intl` timezone, and whether the exit IP is flagged as datacenter/proxy/vpn.
 
+## WebRTC leak (dedicated probe, not a site)
+
+- **Why it matters:** the single biggest proxy de-anonymization risk. WebRTC is
+  interface-agnostic — it sends STUN/UDP out the **physical NIC**, which an
+  HTTP/SOCKS-without-UDP proxy cannot carry. So the **server-reflexive (`srflx`)**
+  ICE candidate returns the host's REAL public IP, bypassing the proxy entirely.
+- **No Chromium flag closes it on an HTTP proxy.** Measured: with
+  `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` (and even
+  `+--enforce-webrtc-ip-permission-check`), 3/3 proxied runs still produced a
+  `srflx` candidate of the real IP. The flag *is* on Chrome's command line; it
+  just can't route/block STUN UDP over an HTTP proxy. mDNS already obfuscates the
+  `host` candidate (`<uuid>.local`); only `srflx` leaks.
+- **Robust parse:** do NOT trust CreepJS's `webrtcLeakIp` — it reads ICE
+  mid-gather (saw `None` vs real-IP across identical runs). Use the dedicated
+  `WEBRTC_PROBE`: it drives its own `RTCPeerConnection` against a public STUN
+  server and WAITS for `iceGatheringState === 'complete'` (9s cap) before
+  reporting every candidate `addr`+`typ`. `_flatten` classifies addresses
+  (mdns / private / public) and flags any public IP != egress as `REAL-IP-LEAK`.
+- **Fix — `BridgeBrowser.webrtc_leak_protection` (default `auto`):** an
+  always-on new-document guard patches `RTCPeerConnection.prototype` members that
+  are *normally own properties* (the `onicecandidate` accessor, the
+  `localDescription*` accessors, `createOffer`/`createAnswer`) to drop any
+  candidate whose IP is public+non-egress and scrub matching `a=candidate:` SDP
+  lines. The page then sees mDNS-only — exactly what a privacy/STUN-firewalled
+  real browser shows (`no-public (ok)`). Modes: `auto` (filter when proxied),
+  `filter` (always), `disable` (remove `RTCPeerConnection`), `off`.
+  - **Verified:** `off` → `REAL-IP-LEAK [140.228.58.188]`; `auto`/`filter` →
+    `no-public (ok)` across runs; `disable` → `no-rtc`. No stealth regression
+    (DAB `isBot=false`, sannysoft 8/8, CreepJS `lieNodes` unchanged at 0–1).
+  - **Critical gotcha:** do NOT reuse the global `_NATIVE_MASK_PREAMBLE`
+    (`Function.prototype.toString` override) in this always-on path — CreepJS
+    detects the global toString tamper and cascades it into ~9 component "lies"
+    (Timezone/WebGL/Canvas/Audio/Math/…). The guard uses a light, **local**
+    own-`toString` per patched fn instead. Advanced
+    `Function.prototype.toString.call` probing of these specific WebRTC members
+    is an accepted depth-layer gap (cheaper than re-leaking the IP or 9 lies).
+  - **Reproduce the raw leak / test modes:** `baseline_probe.py --webrtc-mode
+    off|filter|disable` (bridge + `--proxy`).
+
 ## demo.fingerprint.com/playground (optional, commercial-grade)
 
 - **How produced:** loads Fingerprint Pro JS, which POSTs to
