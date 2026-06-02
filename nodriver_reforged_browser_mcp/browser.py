@@ -455,55 +455,90 @@ class BridgeBrowser:
         await self.tab.send(self._cdp_page.add_script_to_evaluate_on_new_document(source=script))
 
     async def _apply_headless_user_agent(self) -> None:
-        """Strip the ``HeadlessChrome`` token *and* keep client hints consistent.
+        """Strip ``HeadlessChrome`` while keeping main-thread UA-CH populated.
 
-        Overriding only ``navigator.userAgent`` leaves the User-Agent Client
-        Hints (``navigator.userAgentData``) still advertising ``HeadlessChrome``,
-        which detectors flag as an inconsistency. We read the browser's own
-        high-entropy hints, rewrite the headless brand, and push both the clean
-        UA string and matching metadata, then reinforce the UA string via a JS
-        override on new documents.
+        Headless Chrome leaks the automation in ``navigator.userAgent`` (it
+        carries ``HeadlessChrome``), which DAB/sannysoft flag. Stripping it with a
+        CDP user-agent override is the fix -- but a UA-only override (no
+        ``userAgentMetadata``) BLANKS ``navigator.userAgentData`` (empty brands +
+        platform), and an empty brand list is itself a tell since a real Chrome
+        always exposes one. The earlier code hit exactly that trap whenever the
+        live high-entropy hints were unreadable (``getHighEntropyValues`` rejects
+        on ``about:blank`` right after launch), shipping a clean UA with blank
+        UA-CH.
+
+        So we ALWAYS push the override WITH metadata: ``_build_ua_metadata``
+        synthesizes the brand list and infers the host fields from the UA when
+        the live hints are blank. The UA string itself is only rewritten when the
+        legacy token is present.
+
+        SCOPE: this covers the MAIN thread only -- the surface virtually all
+        detectors read. The override does NOT propagate to worker scopes, so a
+        Worker/ServiceWorker still exposes the raw ``HeadlessChrome`` UA and the
+        host's real high-entropy hints. Tools that cross-check window-vs-worker
+        navigator (e.g. CreepJS) therefore still see one inconsistency. Closing
+        that is a deliberate non-goal here: worker-scope UA spoofing needs CDP
+        target auto-attach and is a fragile depth layer most sites never probe.
         """
         try:
             current_ua = await self.tab.evaluate("navigator.userAgent")
         except Exception as exc:
             logger.warning("Could not read headless user-agent: %s", exc)
             return
-        if not isinstance(current_ua, str) or "Headless" not in current_ua:
+        if not isinstance(current_ua, str) or not current_ua:
             return
         clean_ua = current_ua.replace("HeadlessChrome", "Chrome")
+        ua_changed = clean_ua != current_ua
 
+        # Build metadata even when the live hints are unreadable. Right after
+        # launch ``navigator.userAgentData.getHighEntropyValues`` can reject (UA-CH
+        # not ready yet) and ``_read_client_hints`` returns None; passing ``{}``
+        # lets ``_build_ua_metadata`` synthesize the brand list and infer the host
+        # fields purely from the UA string. Critically, headless leaves UA-CH
+        # blank regardless, so we must NEVER fall back to a UA-only override --
+        # that BLANKS ``navigator.userAgentData.brands`` (the very tell we fix).
         metadata = None
         hints = await self._read_client_hints()
-        if hints:
+        try:
+            metadata = self._build_ua_metadata(hints or {}, ua_string=clean_ua)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Could not build client-hints metadata: %s", exc)
+
+        if metadata is None:
+            # Only reachable if metadata synthesis itself failed; at that point a
+            # UA-only override would blank UA-CH, so apply it solely to strip a
+            # legacy headless token and otherwise leave UA-CH untouched.
+            if not ua_changed:
+                return
             try:
-                metadata = self._build_ua_metadata(hints, ua_string=clean_ua)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Could not build client-hints metadata: %s", exc)
+                await self.tab.send(
+                    self._cdp_network.set_user_agent_override(user_agent=clean_ua)
+                )
+            except Exception as exc:
+                logger.warning("Could not override headless user-agent: %s", exc)
+            return
 
         try:
-            if metadata is not None:
-                await self.tab.send(
-                    self._cdp_network.set_user_agent_override(
-                        user_agent=clean_ua, user_agent_metadata=metadata
-                    )
+            await self.tab.send(
+                self._cdp_network.set_user_agent_override(
+                    user_agent=clean_ua, user_agent_metadata=metadata
                 )
-            else:
-                await self.tab.send(self._cdp_network.set_user_agent_override(user_agent=clean_ua))
+            )
         except Exception as exc:
             logger.warning("Could not override headless user-agent: %s", exc)
             return
 
-        try:
-            await self.add_script_on_new_document(
-                "Object.defineProperty(navigator, 'userAgent', "
-                f"{{get: () => {json.dumps(clean_ua)}, configurable: true}});"
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Could not inject UA new-document script: %s", exc)
+        if ua_changed:
+            try:
+                await self.add_script_on_new_document(
+                    "Object.defineProperty(navigator, 'userAgent', "
+                    f"{{get: () => {json.dumps(clean_ua)}, configurable: true}});"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Could not inject UA new-document script: %s", exc)
         logger.info(
-            "Applied headless-safe user agent override (client hints %s).",
-            "aligned" if metadata is not None else "unavailable",
+            "Applied headless UA-CH metadata (brands populated; UA %s).",
+            "rewritten" if ua_changed else "unchanged",
         )
 
     async def _read_client_hints(self) -> dict[str, Any] | None:

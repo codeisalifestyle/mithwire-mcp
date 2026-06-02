@@ -76,6 +76,17 @@ result to exist and never depend on guessing how long a site takes.
 - **Gotcha:** the body literally contains the word "headless" in section labels,
   so testing `/headless/` against body text is **always true** — useless as a
   headless signal. Use the `.lies` categories instead.
+- **Known residual lie (headless, by design):** CreepJS fingerprints in BOTH the
+  main thread and a Worker/ServiceWorker scope and flags any mismatch as a
+  `Navigator … properties` lie. Our headless UA fix (`_apply_headless_user_agent`)
+  only cleans the **main thread** — it strips `HeadlessChrome` and repopulates
+  `userAgentData` there — but the override does not reach worker scopes, so a
+  worker still exposes the raw `HeadlessChrome` UA and the host's real
+  high-entropy hints (e.g. `arm_64` vs the main thread's inferred value). Expect
+  `creep_lieNodes == 1` (one Navigator lie) in headless bridge runs; headful is
+  `0`. Closing it needs CDP target auto-attach worker overrides — a deliberate
+  non-goal (depth layer most sites never probe). This is the matrix's expected
+  headless baseline, not a regression.
 
 ## api.ipapi.is — `https://api.ipapi.is/`
 
