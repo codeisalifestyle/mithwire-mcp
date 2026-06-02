@@ -867,6 +867,7 @@ class BrowserSessionManager:
         launch_config: str | None,
         proxy: str | None = None,
         fingerprint: dict[str, Any] | None = None,
+        webrtc_leak_protection: str | None = None,
     ) -> dict[str, Any]:
         explicit = normalize_launch_options(
             {
@@ -882,6 +883,7 @@ class BrowserSessionManager:
                     "profile": profile,
                     "proxy": proxy,
                     "fingerprint": fingerprint,
+                    "webrtc_leak_protection": webrtc_leak_protection,
                 }.items()
                 if value is not None
             }
@@ -973,6 +975,7 @@ class BrowserSessionManager:
         launch_config: str | None,
         proxy: str | None = None,
         fingerprint: dict[str, Any] | None = None,
+        webrtc_leak_protection: str | None = None,
     ) -> dict[str, Any]:
         resolved_session_id = session_id or f"sess_{uuid.uuid4().hex[:12]}"
         launch_context = self._resolve_launch_context(
@@ -987,6 +990,7 @@ class BrowserSessionManager:
             launch_config=launch_config,
             proxy=proxy,
             fingerprint=fingerprint,
+            webrtc_leak_protection=webrtc_leak_protection,
         )
         launch_values = launch_context["values"]
         resolved_headless = bool(launch_values.get("headless", False))
@@ -1009,6 +1013,7 @@ class BrowserSessionManager:
             sandbox=resolved_sandbox,
             proxy=proxy_config,
             fingerprint=fingerprint_config,
+            webrtc_leak_protection=launch_values.get("webrtc_leak_protection") or "auto",
         )
         await browser.start()
         try:

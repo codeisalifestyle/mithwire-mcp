@@ -119,7 +119,11 @@ def create_server(
             "auto-aligned to the proxy's egress IP. Pass fingerprint={...} to override "
             "any identity field explicitly (timezone_id, languages, latitude/longitude, "
             "user_agent, platform, hardware_concurrency, device_memory, screen, "
-            "webgl_vendor/webgl_renderer); see session_set_fingerprint."
+            "webgl_vendor/webgl_renderer); see session_set_fingerprint. "
+            "webrtc_leak_protection controls the WebRTC IP-leak guard: 'auto' "
+            "(default; filters public ICE candidates when proxied so the real IP "
+            "can't leak via STUN), 'filter' (always filter), 'disable' (remove "
+            "RTCPeerConnection), or 'off'."
         ),
     )
     async def session_start(
@@ -135,6 +139,7 @@ def create_server(
         launch_config: str | None = None,
         proxy: str | None = None,
         fingerprint: dict[str, Any] | None = None,
+        webrtc_leak_protection: str | None = None,
     ) -> dict[str, Any]:
         return await manager.start_session(
             session_id=session_id,
@@ -149,6 +154,7 @@ def create_server(
             launch_config=launch_config,
             proxy=proxy,
             fingerprint=fingerprint,
+            webrtc_leak_protection=webrtc_leak_protection,
         )
 
     @mcp.tool(

@@ -69,6 +69,7 @@ LAUNCH_OPTION_KEYS = (
     "profile",
     "proxy",
     "fingerprint",
+    "webrtc_leak_protection",
 )
 
 _BOOL_LAUNCH_KEYS = {"headless", "sandbox"}
@@ -91,6 +92,7 @@ BUILTIN_LAUNCH_DEFAULTS: dict[str, Any] = {
     "profile": None,
     "proxy": None,
     "fingerprint": None,
+    "webrtc_leak_protection": "auto",
 }
 
 
