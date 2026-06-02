@@ -68,11 +68,15 @@ LAUNCH_OPTION_KEYS = (
     "cookie_fallback_domain",
     "profile",
     "proxy",
+    "fingerprint",
 )
 
 _BOOL_LAUNCH_KEYS = {"headless", "sandbox"}
 _LIST_LAUNCH_KEYS = {"browser_args"}
-_STRING_LAUNCH_KEYS = set(LAUNCH_OPTION_KEYS) - _BOOL_LAUNCH_KEYS - _LIST_LAUNCH_KEYS
+_DICT_LAUNCH_KEYS = {"fingerprint"}
+_STRING_LAUNCH_KEYS = (
+    set(LAUNCH_OPTION_KEYS) - _BOOL_LAUNCH_KEYS - _LIST_LAUNCH_KEYS - _DICT_LAUNCH_KEYS
+)
 
 
 BUILTIN_LAUNCH_DEFAULTS: dict[str, Any] = {
@@ -86,6 +90,7 @@ BUILTIN_LAUNCH_DEFAULTS: dict[str, Any] = {
     "cookie_fallback_domain": None,
     "profile": None,
     "proxy": None,
+    "fingerprint": None,
 }
 
 
@@ -126,6 +131,14 @@ def normalize_launch_options(values: dict[str, Any] | None) -> dict[str, Any]:
                 normalized[key] = [text] if text else []
                 continue
             raise ValueError(f"Launch option '{key}' must be a list of strings.")
+        if key in _DICT_LAUNCH_KEYS:
+            if raw_value is None:
+                normalized[key] = None
+                continue
+            if isinstance(raw_value, dict):
+                normalized[key] = {str(k): v for k, v in raw_value.items() if v is not None}
+                continue
+            raise ValueError(f"Launch option '{key}' must be an object.")
         if key in _STRING_LAUNCH_KEYS:
             if raw_value is None:
                 normalized[key] = None

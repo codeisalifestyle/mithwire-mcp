@@ -115,7 +115,11 @@ def create_server(
             "proxy accepts 'http://host:port', 'http://user:pass@host:port', the "
             "provider 'scheme:host:port:user:pass' form, or socks5://host:port "
             "(authenticated SOCKS not wired yet; use the HTTP endpoint). When a proxy "
-            "is set, the browser timezone is auto-aligned to the proxy's egress IP."
+            "is set, the browser identity (timezone, locale, language, geolocation) is "
+            "auto-aligned to the proxy's egress IP. Pass fingerprint={...} to override "
+            "any identity field explicitly (timezone_id, languages, latitude/longitude, "
+            "user_agent, platform, hardware_concurrency, device_memory, screen, "
+            "webgl_vendor/webgl_renderer); see session_set_fingerprint."
         ),
     )
     async def session_start(
@@ -130,6 +134,7 @@ def create_server(
         profile: str | None = None,
         launch_config: str | None = None,
         proxy: str | None = None,
+        fingerprint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return await manager.start_session(
             session_id=session_id,
@@ -143,6 +148,30 @@ def create_server(
             profile=profile,
             launch_config=launch_config,
             proxy=proxy,
+            fingerprint=fingerprint,
+        )
+
+    @mcp.tool(
+        name="session_set_fingerprint",
+        description=(
+            "Apply identity/anti-detect overrides to a live session via engine-level "
+            "CDP where possible (propagates to workers and HTTP headers). Accepts any "
+            "of: timezone_id, locale, languages (list or comma string), accept_language, "
+            "latitude/longitude/geo_accuracy, user_agent, platform, hardware_concurrency, "
+            "device_memory (GB), screen {width,height,device_scale_factor,mobile,"
+            "max_touch_points}, webgl_vendor, webgl_renderer. Note: navigator.languages "
+            "is best pinned at launch (--lang) since workers can't be rewritten at "
+            "runtime; reload the page after this call so new-document JS overrides "
+            "(deviceMemory, WebGL) take effect everywhere."
+        ),
+    )
+    async def session_set_fingerprint(
+        session_id: str,
+        fingerprint: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await manager.set_fingerprint(
+            session_id=session_id,
+            fingerprint=fingerprint,
         )
 
     @mcp.tool(name="session_list", description="List active browser sessions.")

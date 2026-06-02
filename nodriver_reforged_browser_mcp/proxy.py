@@ -5,8 +5,11 @@ Accepts a handful of common spellings and normalizes them into a single
 itself supports:
 
 * ``http`` / ``https`` upstream proxies, with optional username/password.
-  Authentication is satisfied at runtime through the CDP ``Fetch.authRequired``
-  flow (Chromium prompts with an HTTP 407 challenge, we answer it).
+  Authentication is satisfied by a local authenticating relay (see
+  :mod:`.local_proxy`): Chromium is pointed at ``127.0.0.1`` with no auth and
+  the relay injects ``Proxy-Authorization`` upstream. This avoids per-request
+  CDP ``Fetch`` interception, which floods the event loop and stalls heavy
+  page loads.
 * ``socks5`` / ``socks4`` upstream proxies, **without** authentication.
 
 Chromium's ``--proxy-server`` flag (how this MCP wires every proxy) cannot

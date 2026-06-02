@@ -19,6 +19,7 @@ from . import actions as action_ops
 from .actions import ensure_observers, get_url_and_title
 from .browser import BridgeBrowser
 from .cookies import load_cookie_file
+from .fingerprint import FingerprintConfig
 from .proxy import parse_proxy
 from .state_store import (
     DEFAULT_LAUNCH_CONFIG_NAME,
@@ -865,6 +866,7 @@ class BrowserSessionManager:
         profile: str | None,
         launch_config: str | None,
         proxy: str | None = None,
+        fingerprint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         explicit = normalize_launch_options(
             {
@@ -879,6 +881,7 @@ class BrowserSessionManager:
                     "cookie_fallback_domain": cookie_fallback_domain,
                     "profile": profile,
                     "proxy": proxy,
+                    "fingerprint": fingerprint,
                 }.items()
                 if value is not None
             }
@@ -969,6 +972,7 @@ class BrowserSessionManager:
         profile: str | None,
         launch_config: str | None,
         proxy: str | None = None,
+        fingerprint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         resolved_session_id = session_id or f"sess_{uuid.uuid4().hex[:12]}"
         launch_context = self._resolve_launch_context(
@@ -982,6 +986,7 @@ class BrowserSessionManager:
             profile=profile,
             launch_config=launch_config,
             proxy=proxy,
+            fingerprint=fingerprint,
         )
         launch_values = launch_context["values"]
         resolved_headless = bool(launch_values.get("headless", False))
@@ -994,6 +999,7 @@ class BrowserSessionManager:
         resolved_cookie_fallback_domain = launch_values.get("cookie_fallback_domain")
         resolved_proxy_spec = launch_values.get("proxy")
         proxy_config = parse_proxy(resolved_proxy_spec)
+        fingerprint_config = FingerprintConfig.from_dict(launch_values.get("fingerprint"))
 
         browser = BridgeBrowser(
             headless=resolved_headless,
@@ -1002,6 +1008,7 @@ class BrowserSessionManager:
             browser_executable_path=resolved_browser_executable_path,
             sandbox=resolved_sandbox,
             proxy=proxy_config,
+            fingerprint=fingerprint_config,
         )
         await browser.start()
         try:
@@ -1055,6 +1062,7 @@ class BrowserSessionManager:
                     "proxy": proxy_config.to_metadata() if proxy_config else None,
                     "proxy_timezone": browser.timezone_id,
                     "proxy_exit": proxy_timezone_info,
+                    "fingerprint": browser.fingerprint.to_metadata() or None,
                 },
                 policy=self._new_session_policy(),
                 last_known_url=page.get("url"),
@@ -1066,6 +1074,25 @@ class BrowserSessionManager:
         except Exception:
             await browser.close()
             raise
+
+    async def set_fingerprint(
+        self,
+        *,
+        session_id: str,
+        fingerprint: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        session = await self.get_session(session_id)
+        config = FingerprintConfig.from_dict(fingerprint)
+        async with session.action_lock:
+            applied = await session.browser.apply_fingerprint(config)
+            effective = session.browser.fingerprint.to_metadata()
+        if isinstance(session.metadata, dict):
+            session.metadata["fingerprint"] = effective or None
+        return {
+            "session_id": session.session_id,
+            "applied": applied,
+            "fingerprint": effective or None,
+        }
 
     async def stop_session(self, *, session_id: str) -> dict[str, Any]:
         session = await self._pop_session(session_id)
