@@ -165,3 +165,27 @@ result to exist and never depend on guessing how long a site takes.
   React render delay (~5 s). To read it you must capture the response body (the
   DOM lags and is lossy). Strong commercial signal but flakier — keep it optional,
   not in the core regression set.
+
+## Custom fingerprint spoofing (validation notes)
+
+- **How to test:** `baseline_probe.py --fingerprint PATH` (bridge only) turns a
+  run into the SPOOF case; compare against a no-spoof run. The compare table
+  labels columns `[spoof]` / `[no-spoof]`.
+- **Bar:** the spoof column must (a) actually apply every targeted field and
+  (b) stay internally consistent — i.e. NOT add new "main-detector" failures or
+  a pile of CreepJS lies vs no-spoof.
+- **Same-OS-family rule:** the host worker scope leaks the real OS/arch (e.g.
+  `arm_64` on macOS). Spoofing a *cross-OS* identity (Win UA on a Mac host) makes
+  the main thread disagree with the worker → CreepJS Navigator lie. For a clean
+  consistency test, spoof *within* the host OS family (different tz/lang/screen/
+  webgl/cores), and treat cross-OS as a depth-layer non-goal.
+- **Geo/timezone needs a matching proxy:** spoofing `timezone_id` (or lat/long)
+  with NO proxy puts the browser TZ at odds with the real egress IP's TZ
+  (`tz_match: MISMATCH`). Pair geo spoofing with a same-geo proxy, or it's a tell.
+- **Measured (same-OS Mac profile, headless):** all fields applied (tz, langs,
+  hardwareConcurrency, deviceMemory, screen, webgl); `dab_isBot=false`,
+  sannysoft 8/8; CreepJS `lieNodes`=2 — one **WebGL** lie (the `getParameter`
+  override is detectable via `Function.prototype.toString.call`, an accepted
+  depth gap) + the pre-existing headless **Navigator** worker lie. NB: the
+  preamble must use LOCAL per-fn toString masking, never a global
+  `Function.prototype.toString` override (the latter cascades to ~9 lies).
