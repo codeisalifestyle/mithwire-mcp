@@ -107,20 +107,24 @@ CREEP_PROBE = r"""
 (() => {
   const safe = (f, d=null) => { try { return f(); } catch(e) { return d; } };
   const txt = safe(() => document.body.innerText, "") || "";
-  const grab = (re) => { const m = txt.match(re); return m ? m[1] : null; };
-  // Trust score (e.g. "trust score 57%") and the human/bot blend.
-  const trustScore = grab(/trust score[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*%/i);
-  const blend = grab(/([0-9]+(?:\.[0-9]+)?)\s*%[^\n]*(?:like|blend|crowd)/i);
-  // "lies (N)" header + per-section lie badges in the DOM.
-  const liesHeader = (() => { const m = txt.match(/lies\s*\((\d+)\)/i); return m ? Number(m[1]) : null; })();
-  const lieBadges = safe(() => document.querySelectorAll('.lies').length, null);
-  // Bot/headless verdicts CreepJS prints inline.
-  const botPattern = grab(/bot[^\n]*?:\s*([a-z0-9 .%-]+)/i);
+  // CreepJS marks each fingerprint category it caught lying with the `.lies`
+  // class (this version does not render a plain-text "trust score"). The lie
+  // count + which categories lied is the stable, comparable signal.
+  const lies = safe(() => [...document.querySelectorAll('.lies')], []) || [];
+  const categories = lies.map((e) => {
+    const row = e.closest('div');
+    const ctx = row ? (row.innerText || '').replace(/\s+/g, ' ').trim() : (e.textContent || '');
+    // Section label is the leading word(s) before the element hash.
+    return ctx.slice(0, 24);
+  });
+  // WebRTC can leak the real public IPv4 straight past an HTTP/SOCKS proxy.
+  // (Match a dotted quad specifically; CreepJS also prints non-IP "foundation"
+  // integers next to the literal "ip:" label.)
+  const webrtcIp = (() => { const m = txt.match(/\b((?:\d{1,3}\.){3}\d{1,3})\b/); return m ? m[1] : null; })();
   return {
-    trustScore: trustScore,
-    crowdBlend: blend,
-    liesHeader: liesHeader,
-    lieBadgeNodes: lieBadges,
+    lieNodes: lies.length,
+    lieCategories: categories,
+    webrtcLeakIp: webrtcIp,
     hasHeadlessWord: /headless/i.test(txt),
     bodyLen: txt.length,
   };
@@ -364,9 +368,11 @@ def _flatten(result: dict) -> dict[str, Any]:
         out["sanny_warn"] = sanny.get("warn")
     creep = result.get("probes", {}).get("creepjs") or {}
     if isinstance(creep, dict):
-        out["creep_trust"] = creep.get("trustScore")
-        out["creep_lies"] = creep.get("liesHeader")
-        out["creep_lieNodes"] = creep.get("lieBadgeNodes")
+        out["creep_lieNodes"] = creep.get("lieNodes")
+        out["creep_lieCats"] = creep.get("lieCategories")
+        # webrtcLeakIp is captured in the raw JSON (useful for proxy leak
+        # checks) but kept out of this stealth table — it varies per run and is
+        # a networking, not fingerprint, signal.
     return out
 
 
