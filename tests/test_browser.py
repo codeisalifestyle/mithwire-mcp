@@ -10,8 +10,9 @@ from nodriver_reforged_browser_mcp.proxy import parse_proxy
 class ProxyArgTest(unittest.IsolatedAsyncioTestCase):
     """The proxy config must surface as a --proxy-server launch arg."""
 
-    async def test_proxy_server_arg_passed_to_launch(self) -> None:
-        proxy = parse_proxy("http://user:pass@1.2.3.4:8080")
+    async def test_unauthenticated_proxy_points_chrome_at_upstream(self) -> None:
+        # No credentials -> no relay needed, Chrome talks to the upstream directly.
+        proxy = parse_proxy("http://1.2.3.4:8080")
         browser = BridgeBrowser(headless=True, proxy=proxy)
 
         # Fail the launch right after kwargs are captured; we only care about args.
@@ -21,6 +22,33 @@ class ProxyArgTest(unittest.IsolatedAsyncioTestCase):
 
         args = mock_start.call_args.kwargs.get("browser_args", [])
         self.assertIn("--proxy-server=http://1.2.3.4:8080", args)
+
+    async def test_authenticated_proxy_points_chrome_at_local_relay(self) -> None:
+        # With credentials, Chrome must be pointed at the local authenticating
+        # relay (127.0.0.1, unauthenticated) -- never the upstream directly --
+        # so it never sees a 407 and we avoid per-request CDP Fetch interception.
+        proxy = parse_proxy("http://user:pass@1.2.3.4:8080")
+        browser = BridgeBrowser(headless=True, proxy=proxy)
+
+        try:
+            with patch("nodriver.start", side_effect=RuntimeError("stop")) as mock_start:
+                with self.assertRaises(RuntimeError):
+                    await browser.start()
+
+            args = mock_start.call_args.kwargs.get("browser_args", [])
+            proxy_args = [a for a in args if a.startswith("--proxy-server=")]
+            self.assertEqual(len(proxy_args), 1, args)
+            self.assertTrue(
+                proxy_args[0].startswith("--proxy-server=http://127.0.0.1:"),
+                f"authenticated proxy must route via the local relay, got {proxy_args[0]}",
+            )
+            # The upstream host:port must NOT be handed to Chrome directly.
+            self.assertNotIn("--proxy-server=http://1.2.3.4:8080", args)
+        finally:
+            # start() left the relay running (launch was forced to fail); close it
+            # so the test doesn't leak a bound socket.
+            if browser._proxy_relay is not None:
+                await browser._proxy_relay.close()
 
     async def test_no_proxy_means_no_proxy_arg(self) -> None:
         browser = BridgeBrowser(headless=True)
