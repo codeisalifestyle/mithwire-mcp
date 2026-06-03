@@ -21,6 +21,7 @@ from .browser import BridgeBrowser
 from .cookies import load_cookie_file
 from .fingerprint import FingerprintConfig
 from .proxy import parse_proxy
+from .proxy_health import ProxyHealthError, egress_summary, probe_proxy
 from .state_store import (
     DEFAULT_LAUNCH_CONFIG_NAME,
     BrowserStateStore,
@@ -1003,7 +1004,41 @@ class BrowserSessionManager:
         resolved_cookie_fallback_domain = launch_values.get("cookie_fallback_domain")
         resolved_proxy_spec = launch_values.get("proxy")
         proxy_config = parse_proxy(resolved_proxy_spec)
-        fingerprint_config = FingerprintConfig.from_dict(launch_values.get("fingerprint"))
+        user_fingerprint = FingerprintConfig.from_dict(launch_values.get("fingerprint"))
+
+        # PRE-LAUNCH PROXY HEALTH CHECK
+        # A session whose configured proxy is dead or has bad credentials must
+        # not silently fall back to the host's direct connection — that would
+        # leak the real IP into login flows, pollute a persistent profile, and
+        # break the identity contract (TZ/language we'd auto-derive would be
+        # for the wrong country). The probe also returns the proxy's egress
+        # geo/timezone, which we then feed straight into the default identity
+        # without doing the same lookup again after launch.
+        proxy_egress_data: dict[str, Any] = {}
+        if proxy_config is not None:
+            try:
+                proxy_egress_data = await probe_proxy(proxy_config)
+            except ProxyHealthError as exc:
+                logger.warning(
+                    "Refusing to start session %s: proxy preflight failed (%s)",
+                    resolved_session_id,
+                    exc,
+                )
+                raise
+
+        # IDENTITY DEFAULTS FROM PROXY EGRESS
+        # When a proxy is set, default the browser identity (timezone, locale,
+        # languages, accept-language, geolocation) to the proxy's egress IP so
+        # the two never disagree. Anything the user/profile set explicitly wins
+        # via merged_with — proxy-derived fields are the BASE, user fields the
+        # OVERRIDE. With no proxy, the proxy-derived layer is empty and the
+        # behaviour is identical to before.
+        proxy_defaults = (
+            FingerprintConfig.from_ipapi(proxy_egress_data)
+            if proxy_egress_data
+            else FingerprintConfig()
+        )
+        fingerprint_config = proxy_defaults.merged_with(user_fingerprint)
 
         browser = BridgeBrowser(
             headless=resolved_headless,
@@ -1017,11 +1052,21 @@ class BrowserSessionManager:
         )
         await browser.start()
         try:
+            # If the pre-launch probe gave us egress data, apply_fingerprint
+            # has already pinned the browser timezone (and language, geo, …) to
+            # match — no second lookup needed. For SOCKS we couldn't probe the
+            # egress without a full SOCKS5 implementation, so fall back to the
+            # in-browser ipapi.is lookup (works because it goes through the
+            # already-running proxy) to at least align the timezone.
             proxy_timezone_info: dict[str, Any] | None = None
             if proxy_config is not None:
-                # Align the browser timezone to the proxy egress IP before any
-                # real navigation, so the target site never sees a TZ mismatch.
-                proxy_timezone_info = await browser.align_timezone_to_proxy()
+                if proxy_egress_data:
+                    proxy_timezone_info = egress_summary(proxy_egress_data)
+                    # Mirror what align_timezone_to_proxy used to store, so
+                    # consumers reading browser.proxy_exit_info keep working.
+                    browser.proxy_exit_info = proxy_timezone_info
+                else:
+                    proxy_timezone_info = await browser.align_timezone_to_proxy()
 
             cookie_applied_count = 0
             if resolved_cookie_file:

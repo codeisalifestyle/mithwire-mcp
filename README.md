@@ -181,12 +181,27 @@ straight to `--proxy-server`. Authenticated **SOCKS** is rejected up front
 (Chromium's `--proxy-server` can't carry SOCKS credentials) — use the provider's
 HTTP/HTTPS endpoint instead.
 
-**Timezone alignment.** When a proxy is set, the session's JavaScript timezone is
-auto-aligned to the proxy's egress IP: the browser queries `api.ipapi.is` through
-the proxy and applies the result via CDP `Emulation.setTimezoneOverride` before
-the first real navigation. This removes the browser-vs-IP timezone mismatch that
-fingerprinting services flag as a bot signal. The detected egress (ip, timezone,
-city, country) is recorded in the session metadata under `proxy_exit`.
+**Pre-launch proxy health check.** A session that asks for a proxy is **refused
+before any browser is spawned** if that proxy is unreachable or rejects the
+credentials. The MCP issues a single absolute-form `GET http://api.ipapi.is/`
+to the proxy (with `Proxy-Authorization` when present) and only proceeds on a
+clean 2xx with parseable JSON. There is **no fallback to the host's direct
+connection** — that would silently leak the real IP into login flows and
+cross-contaminate any persistent profile. A bad proxy fails fast with an
+actionable error (timeout / refused TCP / `HTTP 407` etc.); the browser process
+is never started.
+
+**Identity defaults aligned to the proxy egress.** The same probe doubles as
+the egress lookup: when a proxy is set, the session defaults its identity —
+**timezone, locale, languages, Accept-Language, and geolocation** — to the
+proxy's egress IP so the two never disagree. Anything explicitly set in
+`fingerprint={...}` or in the profile's `launch_overrides` wins over the
+proxy-derived default, so profiles can pin a stable identity (e.g. a fixed
+language) and still use rotating proxies. SOCKS proxies get a TCP-only
+liveness check, with timezone alignment falling back to the in-browser
+ipapi.is lookup (no auto-derived language for SOCKS). The detected egress
+(`ip`, `timezone`, `city`, `country`, `country_code`) is recorded in the
+session metadata under `proxy_exit`.
 
 ### Fingerprint / identity spoofing
 
