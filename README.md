@@ -37,6 +37,8 @@ Your AI client launches fresh, isolated browser sessions — ephemeral by defaul
 
 - Powered by `nodriver-reforged`: a maintained no-WebDriver/no-Selenium Chromium automation runtime.
 - Includes anti-bot oriented capabilities, including Cloudflare Turnstile solving through `browser_solve_cloudflare`.
+- **Control the full identity**: IP (authenticated proxy via local relay), location (proxy-aligned timezone), language, and device profile (fingerprint spoofing) — kept internally consistent across workers and headers.
+- **WebRTC leak protection** stops the host's real IP from leaking around the proxy.
 - Built on direct CDP control for low-level precision, observability, and flexibility.
 - Better suited for modern websites where reliability under anti-automation pressure matters.
 
@@ -154,6 +156,8 @@ Everything else is an optional flag layered on top of those two:
 | --- | --- | --- |
 | `headless` | `false` (headful) | Run without a visible window (e.g. CI). |
 | `proxy` | none | Route traffic through an upstream proxy (see below). |
+| `fingerprint` | none | Identity overrides — timezone, locale/languages, geo, user agent, platform, hardware, screen, WebGL (see below). |
+| `webrtc_leak_protection` | `auto` | Guard WebRTC against real-IP leaks: `auto` / `filter` / `disable` / `off` (see below). |
 | `start_url` | none | Navigate here right after launch. |
 | `cookie_file` | none | One-shot injection of cookies from a JSON file at launch. |
 | `sandbox` | `true` | Keep Chromium's sandbox on (recommended; `--no-sandbox` is easily bot-detected). |
@@ -167,12 +171,15 @@ Everything else is an optional flag layered on top of those two:
 - the provider `scheme:host:port:user:pass` form
 - `socks5://host:port`
 
-Authenticated **HTTP/HTTPS** proxies are fully supported — credentials are
-answered at runtime over CDP's `Fetch.authRequired` flow. Chromium's
-`--proxy-server` (how this MCP wires every proxy) **cannot** authenticate SOCKS
-proxies; nodriver can via per-context `create_context`, but that path is not
-wired into this launch flow yet, so an authenticated SOCKS spec is rejected up
-front — use the provider's HTTP/HTTPS endpoint instead.
+Authenticated **HTTP/HTTPS** proxies are fully supported. Rather than answering
+the proxy challenge per request over CDP (which floods the event loop and stalls
+heavy page loads), the MCP starts a small **local authenticating relay**:
+Chromium is pointed at `127.0.0.1`, and the relay injects the upstream
+`Proxy-Authorization` header and pipes bytes through to the real proxy. The
+browser never sees a `407`. Unauthenticated HTTP/HTTPS and SOCKS proxies go
+straight to `--proxy-server`. Authenticated **SOCKS** is rejected up front
+(Chromium's `--proxy-server` can't carry SOCKS credentials) — use the provider's
+HTTP/HTTPS endpoint instead.
 
 **Timezone alignment.** When a proxy is set, the session's JavaScript timezone is
 auto-aligned to the proxy's egress IP: the browser queries `api.ipapi.is` through
@@ -180,6 +187,43 @@ the proxy and applies the result via CDP `Emulation.setTimezoneOverride` before
 the first real navigation. This removes the browser-vs-IP timezone mismatch that
 fingerprinting services flag as a bot signal. The detected egress (ip, timezone,
 city, country) is recorded in the session metadata under `proxy_exit`.
+
+### Fingerprint / identity spoofing
+
+Pass a `fingerprint` object to `session_start` (or apply one to a live session
+with `session_set_fingerprint`) to control the identity the browser presents.
+All fields are optional; anything unset is left untouched:
+
+- `timezone_id`, `locale`, `languages`, `accept_language`
+- `latitude`, `longitude`, `geo_accuracy`
+- `user_agent`, `platform`, `hardware_concurrency`, `device_memory` (GB)
+- `screen` — `width`, `height`, `device_scale_factor`, `mobile`, `max_touch_points`
+- `webgl_vendor`, `webgl_renderer`
+
+Overrides are applied at the **engine level via CDP `Emulation.*` wherever
+Chromium supports it**, so they propagate to Web Workers and HTTP request
+headers — not just the main document — keeping every signal internally
+consistent (a mismatched override is worse than none). The handful of properties
+with no CDP equivalent (`navigator.deviceMemory`, and the WebGL strings when
+requested) fall back to injected JS.
+
+Two consistency rules matter: keep overrides **same-OS-family** (don't claim a
+Windows UA on a macOS host), and if you spoof geo/timezone, **back it with a
+matching proxy** so the egress IP agrees.
+
+### WebRTC leak protection
+
+WebRTC can open a STUN connection that reveals the host's real local and public
+IPs directly, **bypassing the proxy entirely** (UDP isn't proxied) — the single
+biggest de-anonymization leak for a proxied browser. The `webrtc_leak_protection`
+option controls the guard:
+
+| Mode | Behavior |
+| --- | --- |
+| `auto` (default) | Filter leaky ICE candidates when a proxy is set; otherwise leave WebRTC intact. |
+| `filter` | Always drop public, non-egress ICE candidates and scrub SDP. |
+| `disable` | Remove `RTCPeerConnection` entirely (no WebRTC at all). |
+| `off` | No protection (real IP can leak). |
 
 ### Verifying stealth
 
@@ -267,6 +311,7 @@ Client config for this mode:
 - `session_launch_config_get`
 - `session_launch_config_set`
 - `session_launch_config_delete`
+- `session_set_fingerprint`
 - `session_set_policy`
 - `session_get_policy`
 - `session_set_download_dir`
@@ -320,6 +365,7 @@ Client config for this mode:
 - `browser_storage_clear`
 - `browser_take_screenshot`
 - `browser_evaluate`
+- `browser_solve_cloudflare`
 
 ## Project docs
 
