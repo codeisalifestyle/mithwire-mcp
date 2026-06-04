@@ -19,13 +19,14 @@ dependencies = [
 [project.scripts]
 nodriver-reforged-mcp = "nodriver_reforged_mcp.server:main"
 
-# Multi-repo development: when iterating on the engine alongside this MCP,
-# clone the engine next to this repo and uncomment the override below. uv
-# will pick up the local checkout instead of pulling from PyPI. `uv build`
-# strips this section so it never reaches the published wheel.
-#
-# [tool.uv.sources]
-# nodriver-reforged = { path = "../nodriver-reforged", editable = true }
+# Multi-repo development: while the engine is unpublished (or when you're
+# iterating on both layers at once), uv pulls the engine from the sibling
+# checkout below. `uv build` strips [tool.uv.sources] so this never reaches
+# the published wheel — it only affects local development. Comment the
+# block out (or delete it) once `nodriver-reforged` is on PyPI and you no
+# longer want a local override.
+[tool.uv.sources]
+nodriver-reforged = { path = "../nodriver-reforged", editable = true }
 
 [tool.setuptools]
 include-package-data = true

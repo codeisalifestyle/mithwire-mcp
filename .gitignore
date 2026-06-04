@@ -27,3 +27,4 @@ screenshots/
 .cursor/
 *.log
 /results
+uv.lock
