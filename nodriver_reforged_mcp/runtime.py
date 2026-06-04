@@ -1,4 +1,4 @@
-"""Session runtime for nodriver-reforged-browser-mcp."""
+"""Session runtime for nodriver-reforged-mcp."""
 
 from __future__ import annotations
 

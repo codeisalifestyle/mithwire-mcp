@@ -52,7 +52,7 @@ def secure_write_text(path: Path, text: str, *, mode: int = SECRET_FILE_MODE) ->
 
 
 STATE_ROOT_ENV_VAR = "NODRIVER_REFORGED_BROWSER_MCP_HOME"
-DEFAULT_STATE_ROOT_DIRNAME = ".nodriver-reforged-browser-mcp"
+DEFAULT_STATE_ROOT_DIRNAME = ".nodriver-reforged-mcp"
 DEFAULT_LAUNCH_CONFIG_NAME = "default"
 
 VALID_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

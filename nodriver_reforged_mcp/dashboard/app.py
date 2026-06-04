@@ -49,7 +49,7 @@ _STARTUP_DEADLINE_SECONDS = 5.0
 
 def _package_version() -> str:
     try:
-        return version("nodriver-reforged-browser-mcp")
+        return version("nodriver-reforged-mcp")
     except PackageNotFoundError:
         return "0.0.0+unknown"
 

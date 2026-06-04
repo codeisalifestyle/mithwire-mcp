@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from nodriver_reforged_browser_mcp.actions import (
+from nodriver_reforged_mcp.actions import (
     clear_cookies,
     clear_storage,
     close_tab,
@@ -381,7 +381,7 @@ class NavigationActionsTest(unittest.IsolatedAsyncioTestCase):
 class WaitActionsTest(unittest.IsolatedAsyncioTestCase):
     async def test_wait_for_url_matches_substring(self) -> None:
         with patch(
-            "nodriver_reforged_browser_mcp.actions.get_url_and_title",
+            "nodriver_reforged_mcp.actions.get_url_and_title",
             new=AsyncMock(
                 side_effect=[
                     {"url": "https://example.com/login", "title": "Login"},
@@ -400,7 +400,7 @@ class WaitActionsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_wait_for_url_timeout_returns_error(self) -> None:
         with patch(
-            "nodriver_reforged_browser_mcp.actions.get_url_and_title",
+            "nodriver_reforged_mcp.actions.get_url_and_title",
             new=AsyncMock(return_value={"url": "https://example.com/login", "title": "Login"}),
         ):
             payload = await wait_for_url(
@@ -420,7 +420,7 @@ class WaitActionsTest(unittest.IsolatedAsyncioTestCase):
             ]
         )
         with patch(
-            "nodriver_reforged_browser_mcp.actions.get_url_and_title",
+            "nodriver_reforged_mcp.actions.get_url_and_title",
             new=AsyncMock(return_value={"url": "https://example.com", "title": "Home"}),
         ):
             payload = await wait_for_text(
@@ -436,7 +436,7 @@ class WaitActionsTest(unittest.IsolatedAsyncioTestCase):
     async def test_wait_for_function_eventually_truthy(self) -> None:
         browser = _FakeEvaluateBrowser([0, "", {"ok": True}])
         with patch(
-            "nodriver_reforged_browser_mcp.actions.get_url_and_title",
+            "nodriver_reforged_mcp.actions.get_url_and_title",
             new=AsyncMock(return_value={"url": "https://example.com", "title": "Home"}),
         ):
             payload = await wait_for_function(
@@ -456,9 +456,9 @@ class WaitActionsTest(unittest.IsolatedAsyncioTestCase):
             ]
         )
         with (
-            patch("nodriver_reforged_browser_mcp.actions.ensure_observers", new=AsyncMock()),
+            patch("nodriver_reforged_mcp.actions.ensure_observers", new=AsyncMock()),
             patch(
-                "nodriver_reforged_browser_mcp.actions.get_url_and_title",
+                "nodriver_reforged_mcp.actions.get_url_and_title",
                 new=AsyncMock(return_value={"url": "https://example.com", "title": "Home"}),
             ),
         ):

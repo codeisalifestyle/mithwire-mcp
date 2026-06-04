@@ -2,7 +2,7 @@
 
 import unittest
 
-from nodriver_reforged_browser_mcp.proxy import ProxyConfig, parse_proxy
+from nodriver_reforged_mcp.proxy import ProxyConfig, parse_proxy
 
 
 class ParseProxyTest(unittest.TestCase):

@@ -95,7 +95,7 @@ async def trigger_rotation(
         request = urllib.request.Request(
             rotation_url,
             headers={
-                "User-Agent": "nodriver-reforged-browser-mcp/rotate",
+                "User-Agent": "nodriver-reforged-mcp/rotate",
                 "Accept": "application/json, */*",
             },
             method="GET",
@@ -230,7 +230,7 @@ async def _http_egress_probe(proxy: ProxyConfig, *, timeout: float) -> dict[str,
         request = urllib.request.Request(
             _PROBE_TARGET_URL,
             headers={
-                "User-Agent": "nodriver-reforged-browser-mcp/proxy-probe",
+                "User-Agent": "nodriver-reforged-mcp/proxy-probe",
                 "Accept": "application/json, */*",
                 "Connection": "close",
             },

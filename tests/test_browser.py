@@ -3,8 +3,8 @@ import signal
 import unittest
 from unittest.mock import MagicMock, patch
 
-from nodriver_reforged_browser_mcp.browser import BridgeBrowser
-from nodriver_reforged_browser_mcp.proxy import parse_proxy
+from nodriver_reforged_mcp.browser import BridgeBrowser
+from nodriver_reforged_mcp.proxy import parse_proxy
 
 
 class ProxyArgTest(unittest.IsolatedAsyncioTestCase):

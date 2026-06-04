@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from nodriver_reforged_browser_mcp.runtime import BrowserSessionManager
-from nodriver_reforged_browser_mcp.state_store import (
+from nodriver_reforged_mcp.runtime import BrowserSessionManager
+from nodriver_reforged_mcp.state_store import (
     BrowserStateStore,
     secure_write_text,
     validate_name,

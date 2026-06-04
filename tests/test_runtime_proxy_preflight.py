@@ -18,9 +18,9 @@ import unittest
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-from nodriver_reforged_browser_mcp.fingerprint import FingerprintConfig
-from nodriver_reforged_browser_mcp.proxy_health import ProxyHealthError
-from nodriver_reforged_browser_mcp.runtime import BrowserSessionManager
+from nodriver_reforged_mcp.fingerprint import FingerprintConfig
+from nodriver_reforged_mcp.proxy_health import ProxyHealthError
+from nodriver_reforged_mcp.runtime import BrowserSessionManager
 
 
 _EGRESS_DE = {
@@ -114,7 +114,7 @@ class _StubBrowser:
 
 def _patch_browser():
     return patch(
-        "nodriver_reforged_browser_mcp.runtime.BridgeBrowser",
+        "nodriver_reforged_mcp.runtime.BridgeBrowser",
         side_effect=lambda **kwargs: _StubBrowser(**kwargs),
     )
 
@@ -122,11 +122,11 @@ def _patch_browser():
 def _patch_observers_and_url():
     # The manager calls these after browser.start(); short-circuit them.
     observers = patch(
-        "nodriver_reforged_browser_mcp.runtime.ensure_observers",
+        "nodriver_reforged_mcp.runtime.ensure_observers",
         new=AsyncMock(return_value=None),
     )
     url = patch(
-        "nodriver_reforged_browser_mcp.runtime.get_url_and_title",
+        "nodriver_reforged_mcp.runtime.get_url_and_title",
         new=AsyncMock(return_value={"url": "about:blank", "title": ""}),
     )
     return observers, url
@@ -142,7 +142,7 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
     async def test_no_proxy_skips_probe_and_uses_user_fingerprint_as_is(self) -> None:
         observers, url = _patch_observers_and_url()
         with _patch_browser(), observers, url, patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(side_effect=AssertionError("probe must not run without a proxy")),
         ):
             await self.manager.start_session(
@@ -169,7 +169,7 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
     async def test_bad_proxy_refuses_session_before_browser_starts(self) -> None:
         observers, url = _patch_observers_and_url()
         with _patch_browser(), observers, url, patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(side_effect=ProxyHealthError("simulated 407")),
         ):
             with self.assertRaises(ProxyHealthError) as ctx:
@@ -195,7 +195,7 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
     async def test_good_proxy_defaults_identity_to_egress(self) -> None:
         observers, url = _patch_observers_and_url()
         with _patch_browser(), observers, url, patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(return_value=_EGRESS_DE),
         ):
             summary = await self.manager.start_session(
@@ -238,7 +238,7 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_fingerprint_overrides_proxy_defaults(self) -> None:
         observers, url = _patch_observers_and_url()
         with _patch_browser(), observers, url, patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(return_value=_EGRESS_DE),
         ):
             await self.manager.start_session(
@@ -272,7 +272,7 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
         )
         observers, url = _patch_observers_and_url()
         with _patch_browser(), observers, url, patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(return_value=_EGRESS_DE),
         ):
             await self.manager.start_session(
@@ -301,7 +301,7 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
         # rotation tool can use it.
         observers, url = _patch_observers_and_url()
         with _patch_browser(), observers, url, patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(return_value=_EGRESS_DE),
         ):
             summary = await self.manager.start_session(
@@ -342,7 +342,7 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
         # the browser to do the ipapi.is lookup through itself.
         observers, url = _patch_observers_and_url()
         with _patch_browser(), observers, url, patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(return_value={}),
         ):
             await self.manager.start_session(
@@ -397,7 +397,7 @@ class RotateProxyTest(unittest.IsolatedAsyncioTestCase):
     ) -> str:
         observers, url = _patch_observers_and_url()
         with _patch_browser(), observers, url, patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(return_value=egress),
         ):
             summary = await self.manager.start_session(
@@ -431,10 +431,10 @@ class RotateProxyTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stub.fingerprint.timezone_id, "Europe/Berlin")
 
         with patch(
-            "nodriver_reforged_browser_mcp.runtime.trigger_rotation",
+            "nodriver_reforged_mcp.runtime.trigger_rotation",
             new=AsyncMock(return_value={"status": 200, "response": {"new_ip": "198.51.100.7"}}),
         ), patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(return_value=_EGRESS_US),
         ):
             result = await self.manager.rotate_proxy(
@@ -478,10 +478,10 @@ class RotateProxyTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stub.fingerprint.languages, ["ja-JP", "ja", "en"])
 
         with patch(
-            "nodriver_reforged_browser_mcp.runtime.trigger_rotation",
+            "nodriver_reforged_mcp.runtime.trigger_rotation",
             new=AsyncMock(return_value={"status": 200, "response": None}),
         ), patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(return_value=_EGRESS_US),
         ):
             await self.manager.rotate_proxy(
@@ -519,10 +519,10 @@ class RotateProxyTest(unittest.IsolatedAsyncioTestCase):
             },
         )
         with patch(
-            "nodriver_reforged_browser_mcp.runtime.trigger_rotation",
+            "nodriver_reforged_mcp.runtime.trigger_rotation",
             new=AsyncMock(return_value={"status": 200, "response": {}}),
         ), patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(side_effect=ProxyHealthError("407 after rotate")),
         ):
             with self.assertRaises(ProxyHealthError) as ctx:
@@ -555,13 +555,13 @@ class RotateProxyTest(unittest.IsolatedAsyncioTestCase):
             ]
         )
         with patch(
-            "nodriver_reforged_browser_mcp.runtime.trigger_rotation",
+            "nodriver_reforged_mcp.runtime.trigger_rotation",
             new=AsyncMock(return_value={"status": 200, "response": None}),
         ), patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy", new=probe_mock
+            "nodriver_reforged_mcp.runtime.probe_proxy", new=probe_mock
         ), patch(
             # Make the inner backoff sleep instant so the test stays fast.
-            "nodriver_reforged_browser_mcp.runtime.asyncio.sleep",
+            "nodriver_reforged_mcp.runtime.asyncio.sleep",
             new=AsyncMock(return_value=None),
         ):
             result = await self.manager.rotate_proxy(
@@ -591,7 +591,7 @@ class RotateProxyTest(unittest.IsolatedAsyncioTestCase):
             sleep_calls.append(float(seconds))
 
         with patch(
-            "nodriver_reforged_browser_mcp.runtime.trigger_rotation",
+            "nodriver_reforged_mcp.runtime.trigger_rotation",
             new=AsyncMock(
                 return_value={
                     "status": 200,
@@ -599,10 +599,10 @@ class RotateProxyTest(unittest.IsolatedAsyncioTestCase):
                 }
             ),
         ), patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(return_value=_EGRESS_US),
         ), patch(
-            "nodriver_reforged_browser_mcp.runtime.asyncio.sleep",
+            "nodriver_reforged_mcp.runtime.asyncio.sleep",
             new=_record_sleep,
         ):
             await self.manager.rotate_proxy(
@@ -630,10 +630,10 @@ class RotateProxyTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stub.fingerprint.timezone_id, "Europe/Berlin")
 
         with patch(
-            "nodriver_reforged_browser_mcp.runtime.trigger_rotation",
+            "nodriver_reforged_mcp.runtime.trigger_rotation",
             new=AsyncMock(return_value={"status": 200, "response": None}),
         ), patch(
-            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            "nodriver_reforged_mcp.runtime.probe_proxy",
             new=AsyncMock(return_value=_EGRESS_US),
         ):
             result = await self.manager.rotate_proxy(

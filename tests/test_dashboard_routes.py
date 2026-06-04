@@ -14,8 +14,8 @@ from pathlib import Path
 
 from starlette.testclient import TestClient
 
-from nodriver_reforged_browser_mcp.dashboard import DashboardConfig, create_dashboard_app
-from nodriver_reforged_browser_mcp.runtime import BrowserSessionManager
+from nodriver_reforged_mcp.dashboard import DashboardConfig, create_dashboard_app
+from nodriver_reforged_mcp.runtime import BrowserSessionManager
 
 
 class DashboardRouteTest(unittest.TestCase):

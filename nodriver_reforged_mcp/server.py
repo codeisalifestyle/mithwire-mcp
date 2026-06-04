@@ -63,7 +63,7 @@ from .actions import (
 from .dashboard import DashboardConfig, DashboardServer
 from .runtime import BrowserSessionManager
 
-SERVER_NAME = "nodriver-reforged-browser-mcp"
+SERVER_NAME = "nodriver-reforged-mcp"
 
 logger = logging.getLogger(__name__)
 
@@ -1347,7 +1347,7 @@ def create_server(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="nodriver-reforged-browser-mcp",
+        prog="nodriver-reforged-mcp",
         description="Stealth nodriver-reforged browser MCP server.",
     )
     parser.add_argument(
@@ -1369,7 +1369,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Optional root directory for centralized profiles/cookies/configs. "
-            "Defaults to ~/.nodriver-reforged-browser-mcp or $NODRIVER_REFORGED_BROWSER_MCP_HOME."
+            "Defaults to ~/.nodriver-reforged-mcp or $NODRIVER_REFORGED_BROWSER_MCP_HOME."
         ),
     )
     parser.add_argument(

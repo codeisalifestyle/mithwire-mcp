@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nodriver-reforged-browser-mcp"
+name = "nodriver-reforged-mcp"
 version = "0.1.0"
 description = "MCP browser bridge that gives AI clients full access to a live browser environment."
 readme = "README.md"
@@ -12,21 +12,26 @@ license = { text = "MIT" }
 authors = [{ name = "codeisalifestyle" }]
 dependencies = [
   "mcp>=1.26.0,<2",
-  "nodriver-reforged",
+  "nodriver-reforged>=0.50,<0.60",
   "opencv-python>=4.8,<5",
 ]
 
 [project.scripts]
-nodriver-reforged-browser-mcp = "nodriver_reforged_browser_mcp.server:main"
+nodriver-reforged-mcp = "nodriver_reforged_mcp.server:main"
 
-[tool.uv.sources]
-nodriver-reforged = { workspace = true }
+# Multi-repo development: when iterating on the engine alongside this MCP,
+# clone the engine next to this repo and uncomment the override below. uv
+# will pick up the local checkout instead of pulling from PyPI. `uv build`
+# strips this section so it never reaches the published wheel.
+#
+# [tool.uv.sources]
+# nodriver-reforged = { path = "../nodriver-reforged", editable = true }
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["nodriver_reforged_browser_mcp*"]
+include = ["nodriver_reforged_mcp*"]
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]

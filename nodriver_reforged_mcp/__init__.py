@@ -1,4 +1,4 @@
-"""nodriver-reforged-browser-mcp package."""
+"""nodriver-reforged-mcp package."""
 
 from .server import create_server
 

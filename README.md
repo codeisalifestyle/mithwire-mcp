@@ -1,4 +1,4 @@
-# nodriver-reforged-browser-mcp
+# nodriver-reforged-mcp
 
 🚀 MCP server that gives AI clients full access to a live Chromium browser environment.
 
@@ -10,7 +10,7 @@ Your AI client launches fresh, isolated browser sessions — ephemeral by defaul
 
 ## 🌟 Product Highlights
 
-`nodriver-reforged-browser-mcp` turns browser automation into a reliable MCP service your agents can trust in real workflows, not just demos.
+`nodriver-reforged-mcp` turns browser automation into a reliable MCP service your agents can trust in real workflows, not just demos.
 
 ### 🧠 Intelligent Chromium orchestration
 
@@ -71,28 +71,28 @@ py -m pip install --user pipx
 py -m pipx ensurepath
 ```
 
-### 2) Install `nodriver-reforged-browser-mcp`
+### 2) Install `nodriver-reforged-mcp`
 
 Option A (recommended): install with `pipx`
 
 ```bash
-pipx install "git+https://github.com/codeisalifestyle/nodriver-reforged.git#subdirectory=packages/nodriver-reforged-browser-mcp"
+pipx install "git+https://github.com/codeisalifestyle/nodriver-reforged.git#subdirectory=packages/nodriver-reforged-mcp"
 ```
 
 Option B (no `pipx`): install in a dedicated virtual environment
 
 ```bash
-python3 -m venv ~/.venvs/nodriver-reforged-browser-mcp
-source ~/.venvs/nodriver-reforged-browser-mcp/bin/activate
-pip install "git+https://github.com/codeisalifestyle/nodriver-reforged.git#subdirectory=packages/nodriver-reforged-browser-mcp"
+python3 -m venv ~/.venvs/nodriver-reforged-mcp
+source ~/.venvs/nodriver-reforged-mcp/bin/activate
+pip install "git+https://github.com/codeisalifestyle/nodriver-reforged.git#subdirectory=packages/nodriver-reforged-mcp"
 ```
 
-> **Note:** `nodriver-reforged-browser-mcp` lives inside the [`nodriver-reforged`](https://github.com/codeisalifestyle/nodriver-reforged) monorepo as of v0.2. The install URL points at the `packages/nodriver-reforged-browser-mcp` subdirectory of that repo.
+> **Note:** `nodriver-reforged-mcp` lives inside the [`nodriver-reforged`](https://github.com/codeisalifestyle/nodriver-reforged) monorepo as of v0.2. The install URL points at the `packages/nodriver-reforged-mcp` subdirectory of that repo.
 
 Verify:
 
 ```bash
-nodriver-reforged-browser-mcp --help
+nodriver-reforged-mcp --help
 ```
 
 ### 3) Add it to your MCP client
@@ -102,8 +102,8 @@ Most MCP-enabled clients accept a config shaped like this:
 ```json
 {
   "mcpServers": {
-    "nodriver-reforged-browser-mcp": {
-      "command": "nodriver-reforged-browser-mcp",
+    "nodriver-reforged-mcp": {
+      "command": "nodriver-reforged-mcp",
       "args": ["--transport", "stdio"]
     }
   }
@@ -114,10 +114,10 @@ If your client cannot find the command, use an absolute path:
 
 ```bash
 # macOS / Linux
-which nodriver-reforged-browser-mcp
+which nodriver-reforged-mcp
 
 # Windows (PowerShell)
-where.exe nodriver-reforged-browser-mcp
+where.exe nodriver-reforged-mcp
 ```
 
 Then set `"command"` to that full path.
@@ -125,7 +125,7 @@ Then set `"command"` to that full path.
 If you used Option B, your command path is typically:
 
 ```bash
-~/.venvs/nodriver-reforged-browser-mcp/bin/nodriver-reforged-browser-mcp
+~/.venvs/nodriver-reforged-mcp/bin/nodriver-reforged-mcp
 ```
 
 ### 4) First-use test in your AI client
@@ -274,11 +274,11 @@ separate cookie operations are **injection** (`cookie_file` at launch, or
 
 ## Centralized browser state store
 
-`nodriver-reforged-browser-mcp` now keeps reusable browser state in one place:
+`nodriver-reforged-mcp` now keeps reusable browser state in one place:
 
-- Default root: `~/.nodriver-reforged-browser-mcp`
+- Default root: `~/.nodriver-reforged-mcp`
 - Override with env var: `NODRIVER_REFORGED_BROWSER_MCP_HOME=/custom/path`
-- Override per server run: `nodriver-reforged-browser-mcp --state-root /custom/path`
+- Override per server run: `nodriver-reforged-mcp --state-root /custom/path`
 
 Within that root:
 
@@ -299,14 +299,14 @@ This lets your AI client map account-oriented tasks to stable browser identities
 
 ## Development setup
 
-`nodriver-reforged-browser-mcp` is developed inside the [`nodriver-reforged`](https://github.com/codeisalifestyle/nodriver-reforged) `uv` workspace, so the engine and the MCP can be edited together with no pin-bumping.
+`nodriver-reforged-mcp` is developed inside the [`nodriver-reforged`](https://github.com/codeisalifestyle/nodriver-reforged) `uv` workspace, so the engine and the MCP can be edited together with no pin-bumping.
 
 ```bash
 git clone https://github.com/codeisalifestyle/nodriver-reforged.git
 cd nodriver-reforged
 uv sync                            # creates .venv at repo root, installs both packages editable
-uv run pytest packages/nodriver-reforged-browser-mcp/tests -q
-uv run nodriver-reforged-browser-mcp --transport stdio
+uv run pytest packages/nodriver-reforged-mcp/tests -q
+uv run nodriver-reforged-mcp --transport stdio
 ```
 
 Client config for this mode:
@@ -314,8 +314,8 @@ Client config for this mode:
 ```json
 {
   "mcpServers": {
-    "nodriver-reforged-browser-mcp": {
-      "command": "/absolute/path/to/nodriver-reforged-browser-mcp",
+    "nodriver-reforged-mcp": {
+      "command": "/absolute/path/to/nodriver-reforged-mcp",
       "args": ["--transport", "stdio"]
     }
   }
@@ -401,9 +401,9 @@ Client config for this mode:
 
 ## Troubleshooting
 
-- **"command not found: nodriver-reforged-browser-mcp"**
+- **"command not found: nodriver-reforged-mcp"**
   - Run `pipx ensurepath`, restart terminal and AI client, then retry.
-  - Use absolute command path from `which nodriver-reforged-browser-mcp`.
+  - Use absolute command path from `which nodriver-reforged-mcp`.
 - **Python version mismatch**
   - Use a supported Python (`>=3.10`) and reinstall/upgrade the package in your MCP environment.
 - **Browser fails to launch in restricted environments**

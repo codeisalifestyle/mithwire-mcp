@@ -519,15 +519,15 @@ class BridgeDriver:
         self.b: Any = None
 
     async def start(self) -> None:
-        from nodriver_reforged_browser_mcp.browser import BridgeBrowser
-        from nodriver_reforged_browser_mcp.proxy import parse_proxy
+        from nodriver_reforged_mcp.browser import BridgeBrowser
+        from nodriver_reforged_mcp.proxy import parse_proxy
 
         kwargs: dict[str, Any] = {"headless": self.headless, "proxy": parse_proxy(self.proxy)}
         if self.webrtc:
             kwargs["webrtc_leak_protection"] = self.webrtc
         if self.fingerprint:
             # Imported from the same checkout as BridgeBrowser (honors --package-dir).
-            from nodriver_reforged_browser_mcp.fingerprint import FingerprintConfig
+            from nodriver_reforged_mcp.fingerprint import FingerprintConfig
 
             kwargs["fingerprint"] = FingerprintConfig.from_dict(self.fingerprint)
         self.b = BridgeBrowser(**kwargs)
@@ -963,7 +963,7 @@ def main() -> None:
         help=(
             "Import the 'bridge' BridgeBrowser from this package dir instead of "
             "the installed/working-tree one. Point it at a git worktree's "
-            "'packages/nodriver-reforged-browser-mcp' to baseline another ref "
+            "'packages/nodriver-reforged-mcp' to baseline another ref "
             "without checking it out (no stash/checkout churn)."
         ),
     )

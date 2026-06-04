@@ -17,8 +17,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Awaitable, Callable
 
-from nodriver_reforged_browser_mcp.proxy import ProxyConfig
-from nodriver_reforged_browser_mcp.proxy_health import (
+from nodriver_reforged_mcp.proxy import ProxyConfig
+from nodriver_reforged_mcp.proxy_health import (
     ProxyHealthError,
     ProxyRotationError,
     egress_summary,

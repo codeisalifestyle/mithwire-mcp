@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from nodriver_reforged_browser_mcp.runtime import (
+from nodriver_reforged_mcp.runtime import (
     BrowserSession,
     BrowserSessionManager,
 )
