@@ -60,9 +60,12 @@ from .actions import (
 from .actions import (
     wait_seconds as wait_for_seconds,
 )
+from .dashboard import DashboardConfig, DashboardServer
 from .runtime import BrowserSessionManager
 
 SERVER_NAME = "nodriver-reforged-browser-mcp"
+
+logger = logging.getLogger(__name__)
 
 
 def create_server(
@@ -75,6 +78,9 @@ def create_server(
     default_allowed_domains: list[str] | None = None,
     default_blocked_domains: list[str] | None = None,
     default_allow_evaluate: bool | None = None,
+    dashboard_port: int | None = None,
+    dashboard_host: str = "127.0.0.1",
+    dashboard_token: str | None = None,
 ) -> FastMCP:
     manager = BrowserSessionManager(
         state_root=state_root,
@@ -84,11 +90,51 @@ def create_server(
         default_allow_evaluate=default_allow_evaluate,
     )
 
+    # Mutable single-slot holder so both the CLI runner and the
+    # ``dashboard_*`` MCP tools can install / replace / remove a running
+    # sidecar at any point in the process lifetime. We deliberately do NOT
+    # hook the dashboard into the FastMCP per-MCP-session lifespan: under
+    # ``streamable-http`` that lifespan fires per session, not at process
+    # startup, so the dashboard would never bind its socket until the first
+    # MCP client connected. The CLI runner (``_run_with_dashboard``) starts
+    # it before the transport binds; the tools start it on demand.
+    dashboard_holder: dict[str, DashboardServer | None] = {"server": None}
+    dashboard_default_log_level = log_level
+    if dashboard_port:
+        # The state store lives inside the manager; pull it via the same
+        # public surface tools use so we don't reach into a private attr.
+        dashboard_config = DashboardConfig(
+            manager=manager,
+            store=manager._state_store,  # noqa: SLF001 — single source of truth
+            host=dashboard_host,
+            port=int(dashboard_port),
+            token=dashboard_token,
+            log_level=dashboard_default_log_level,
+        )
+        dashboard_holder["server"] = DashboardServer(dashboard_config)
+        # Log the URL + token now (once) so the operator can paste it before
+        # the session loop starts. Tokens are not re-logged afterwards.
+        logger.info(
+            "Dashboard available at %s/?token=%s",
+            dashboard_holder["server"].url,  # type: ignore[union-attr]
+            dashboard_config.token,
+        )
+
     @asynccontextmanager
     async def lifespan(_: FastMCP):
         try:
             yield
         finally:
+            # Tear down the dashboard before nuking sessions so an open WS
+            # client gets a clean close instead of a CDP-level disconnect.
+            live = dashboard_holder["server"]
+            if live is not None:
+                try:
+                    await live.shutdown()
+                except Exception:  # noqa: BLE001
+                    logger.exception("Dashboard shutdown failed")
+                finally:
+                    dashboard_holder["server"] = None
             await manager.stop_all_sessions()
 
     mcp = FastMCP(
@@ -104,6 +150,10 @@ def create_server(
         log_level=log_level,  # type: ignore[arg-type]
         lifespan=lifespan,
     )
+    # Attach the holder so the runner (``main``) can lift the dashboard into
+    # the same event loop as the MCP transport without changing the public
+    # ``create_server`` return type. Tools below also read/write through it.
+    mcp.dashboard_holder = dashboard_holder  # type: ignore[attr-defined]
 
     @mcp.tool(
         name="session_start",
@@ -392,6 +442,102 @@ def create_server(
     @mcp.tool(name="session_stop_all", description="Stop all active sessions.")
     async def session_stop_all() -> dict[str, Any]:
         return await manager.stop_all_sessions()
+
+    @mcp.tool(
+        name="dashboard_start",
+        description=(
+            "Start the local HTTP/WebSocket dashboard sidecar inside this MCP "
+            "process. Returns a clickable URL with the auth token "
+            "pre-embedded — open it in a browser to see live sessions, "
+            "profiles, configs, and a real-time event feed. Idempotent: "
+            "returns the existing URL if the dashboard is already running. "
+            "The dashboard stays alive until dashboard_stop or process exit."
+        ),
+    )
+    async def dashboard_start(
+        port: int = 8765,
+        host: str = "127.0.0.1",
+        token: str | None = None,
+    ) -> dict[str, Any]:
+        existing = dashboard_holder["server"]
+        if existing is not None:
+            cfg = existing.config
+            return {
+                "ok": True,
+                "already_running": True,
+                "url": existing.url,
+                "open_url": f"{existing.url}/?token={cfg.token}",
+                "token": cfg.token,
+                "host": cfg.host,
+                "port": cfg.port,
+            }
+        config = DashboardConfig(
+            manager=manager,
+            store=manager._state_store,  # noqa: SLF001 — single source of truth
+            host=host,
+            port=int(port),
+            token=token,
+            log_level=dashboard_default_log_level,
+        )
+        sidecar = DashboardServer(config)
+        try:
+            await sidecar.start()
+        except OSError as exc:
+            # Port in use, perms, bad host — surface a meaningful error to
+            # the AI client instead of leaving a dead listener slot.
+            raise ValueError(
+                f"Failed to bind dashboard on {host}:{port}: {exc}"
+            ) from exc
+        dashboard_holder["server"] = sidecar
+        return {
+            "ok": True,
+            "already_running": False,
+            "url": sidecar.url,
+            "open_url": f"{sidecar.url}/?token={config.token}",
+            "token": config.token,
+            "host": config.host,
+            "port": config.port,
+        }
+
+    @mcp.tool(
+        name="dashboard_stop",
+        description=(
+            "Stop the dashboard sidecar if it is running. Idempotent: returns "
+            "{stopped: false, was_running: false} when no dashboard is up."
+        ),
+    )
+    async def dashboard_stop() -> dict[str, Any]:
+        sidecar = dashboard_holder["server"]
+        if sidecar is None:
+            return {"ok": True, "stopped": False, "was_running": False}
+        try:
+            await sidecar.shutdown()
+        finally:
+            dashboard_holder["server"] = None
+        return {"ok": True, "stopped": True, "was_running": True}
+
+    @mcp.tool(
+        name="dashboard_status",
+        description=(
+            "Inspect the dashboard sidecar. Returns {running: bool, ...} with "
+            "URL, token, bind host/port, and live WebSocket subscriber count "
+            "when running."
+        ),
+    )
+    async def dashboard_status() -> dict[str, Any]:
+        sidecar = dashboard_holder["server"]
+        if sidecar is None:
+            return {"running": False}
+        cfg = sidecar.config
+        return {
+            "running": True,
+            "url": sidecar.url,
+            "open_url": f"{sidecar.url}/?token={cfg.token}",
+            "host": cfg.host,
+            "port": cfg.port,
+            "token": cfg.token,
+            "subscribers": cfg.events.subscriber_count,
+        }
 
     @mcp.tool(name="browser_url", description="Get current URL and page title.")
     async def browser_url(session_id: str) -> dict[str, Any]:
@@ -1259,6 +1405,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable browser_evaluate (arbitrary JavaScript) for every session.",
     )
+    parser.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=None,
+        help=(
+            "If set, run the local HTTP/WebSocket dashboard on this port "
+            "alongside the MCP server. Disabled by default."
+        ),
+    )
+    parser.add_argument(
+        "--dashboard-host",
+        default="127.0.0.1",
+        help="Host for the dashboard sidecar (default: 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--dashboard-token",
+        default=None,
+        help=(
+            "Bearer token required for every dashboard API call. If omitted, "
+            "a fresh token is generated and logged at startup."
+        ),
+    )
     return parser
 
 
@@ -1281,6 +1449,41 @@ def _install_signal_handlers() -> None:
             pass
 
 
+async def _run_with_dashboard(
+    server: FastMCP,
+    transport: Literal["stdio", "sse", "streamable-http"],
+) -> None:
+    """Run the chosen MCP transport with the dashboard sidecar in lockstep.
+
+    The dashboard is started before the MCP transport binds its accept loop
+    and shut down after that loop returns. Both servers share the same
+    asyncio event loop so the ``BrowserSessionManager`` (whose locks are
+    loop-bound) is safe to access from either side.
+    """
+    holder: dict[str, DashboardServer | None] = getattr(
+        server, "dashboard_holder", {"server": None}
+    )
+    dashboard_server = holder.get("server")
+    if dashboard_server is not None:
+        await dashboard_server.start()
+    try:
+        if transport == "stdio":
+            await server.run_stdio_async()
+        elif transport == "sse":
+            await server.run_sse_async()
+        elif transport == "streamable-http":
+            await server.run_streamable_http_async()
+        else:  # pragma: no cover - argparse already restricts the choice
+            raise ValueError(f"Unknown transport: {transport}")
+    finally:
+        # Re-read the holder; the slot may have been swapped by a tool call
+        # while the transport was running.
+        live = holder.get("server")
+        if live is not None:
+            await live.shutdown()
+            holder["server"] = None
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -1295,10 +1498,23 @@ def main() -> None:
         default_allowed_domains=args.allowed_domains,
         default_blocked_domains=args.blocked_domains,
         default_allow_evaluate=default_allow_evaluate,
+        dashboard_port=args.dashboard_port,
+        dashboard_host=args.dashboard_host,
+        dashboard_token=args.dashboard_token,
     )
     _install_signal_handlers()
     try:
-        server.run(transport=args.transport)
+        if args.dashboard_port:
+            # Drive the loop ourselves so the dashboard binds its socket
+            # before the MCP transport starts accepting requests. Plain
+            # ``server.run`` defers our lifespan until the first MCP session
+            # under streamable-http and would not surface the dashboard
+            # until then.
+            import anyio
+
+            anyio.run(_run_with_dashboard, server, args.transport)
+        else:
+            server.run(transport=args.transport)
     except KeyboardInterrupt:
         pass
 
