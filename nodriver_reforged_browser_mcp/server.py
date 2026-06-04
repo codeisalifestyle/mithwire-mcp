@@ -189,6 +189,35 @@ def create_server(
             fingerprint=fingerprint,
         )
 
+    @mcp.tool(
+        name="session_rotate_proxy",
+        description=(
+            "Rotate the upstream exit IP for a session whose proxy was launched "
+            "with a rotation_url. Hits the provider's rotation endpoint, waits a "
+            "short settle window for the new IP to take over, re-probes through "
+            "the proxy to confirm the new egress, and (by default) re-aligns the "
+            "browser identity — timezone, locale, languages, geolocation — to "
+            "the new egress. Caller-pinned fingerprint fields from session_start "
+            "or session_set_fingerprint continue to win over the proxy-derived "
+            "defaults, just like at launch. Returns old + new egress summaries, "
+            "the (redacted) rotation endpoint, the rotation response payload, "
+            "and whether the exit IP actually changed. Fails if the session has "
+            "no proxy or its proxy has no rotation_url."
+        ),
+    )
+    async def session_rotate_proxy(
+        session_id: str,
+        realign_identity: bool = True,
+        settle_seconds: float = 2.0,
+        probe_timeout_seconds: float = 90.0,
+    ) -> dict[str, Any]:
+        return await manager.rotate_proxy(
+            session_id=session_id,
+            realign_identity=realign_identity,
+            settle_seconds=settle_seconds,
+            probe_timeout_seconds=probe_timeout_seconds,
+        )
+
     @mcp.tool(name="session_list", description="List active browser sessions.")
     async def session_list() -> dict[str, Any]:
         sessions = await manager.list_sessions()

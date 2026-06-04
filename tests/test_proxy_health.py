@@ -12,14 +12,18 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Awaitable, Callable
 
 from nodriver_reforged_browser_mcp.proxy import ProxyConfig
 from nodriver_reforged_browser_mcp.proxy_health import (
     ProxyHealthError,
+    ProxyRotationError,
     egress_summary,
     probe_proxy,
+    trigger_rotation,
 )
 
 
@@ -159,10 +163,12 @@ class ProbeProxyHttpTest(unittest.IsolatedAsyncioTestCase):
             )
 
         expected = base64.b64encode(b"alice:s3cret!").decode("ascii")
-        self.assertIn(
-            f"Proxy-Authorization: Basic {expected}".encode("ascii"),
-            recorded["request"],
-        )
+        # urllib's ProxyHandler emits the header with a lowercase ``a`` in
+        # "Proxy-authorization"; the proxy itself reads headers
+        # case-insensitively. Match the value, not the spelling.
+        request_lower = recorded["request"].lower()
+        self.assertIn(b"proxy-authorization: basic", request_lower)
+        self.assertIn(expected.encode("ascii"), recorded["request"])
 
     async def test_407_raises_with_actionable_message(self) -> None:
         def handler(_request: bytes) -> bytes:
@@ -222,7 +228,10 @@ class ProbeProxyHttpTest(unittest.IsolatedAsyncioTestCase):
         async with FakeProxy(handler) as fake:
             with self.assertRaises(ProxyHealthError) as ctx:
                 await probe_proxy(_config_for(fake), timeout_seconds=2.0)
-        self.assertIn("no bytes", str(ctx.exception).lower())
+        # urllib surfaces this as "remote end closed connection without
+        # response" — the exact wording is stdlib-owned, so just assert we
+        # raised ProxyHealthError and pointed at the right proxy.
+        self.assertIn("127.0.0.1", str(ctx.exception))
 
 
 class ProbeProxySocksTest(unittest.IsolatedAsyncioTestCase):
@@ -240,6 +249,91 @@ class ProbeProxySocksTest(unittest.IsolatedAsyncioTestCase):
         cfg = ProxyConfig(scheme="socks5", host="127.0.0.1", port=1)
         with self.assertRaises(ProxyHealthError):
             await probe_proxy(cfg, timeout_seconds=1.0)
+
+
+class _RotationHandler(BaseHTTPRequestHandler):
+    """Captures the request and returns whatever the test set on the server."""
+
+    def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
+        server: "_RotationServer" = self.server  # type: ignore[assignment]
+        server.last_path = self.path
+        server.last_headers = dict(self.headers.items())
+        status, body, content_type = server.next_response
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args, **_kwargs) -> None:
+        # Silence the test runner; the handler stderr is noisy by default.
+        return
+
+
+class _RotationServer(ThreadingHTTPServer):
+    next_response: tuple[int, bytes, str] = (200, b'{"ok": true}', "application/json")
+    last_path: str = ""
+    last_headers: dict[str, str] = {}
+
+
+class TriggerRotationTest(unittest.IsolatedAsyncioTestCase):
+    """``trigger_rotation`` is a sync ``urllib`` call wrapped in ``to_thread``;
+    a real local HTTP server is the cleanest way to exercise it without
+    mocking out the network layer."""
+
+    def setUp(self) -> None:
+        self.server = _RotationServer(("127.0.0.1", 0), _RotationHandler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2.0)
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    async def test_success_parses_json_response(self) -> None:
+        self.server.next_response = (
+            200,
+            b'{"new_ip": "203.0.113.99", "status": "ok"}',
+            "application/json",
+        )
+        result = await trigger_rotation(f"{self.base_url}/rotate", timeout_seconds=2.0)
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["response"]["new_ip"], "203.0.113.99")
+        # The request must reach the expected path.
+        self.assertEqual(self.server.last_path, "/rotate")
+
+    async def test_plain_text_body_wraps_under_raw(self) -> None:
+        # Some providers reply "ok\n" — that's still a 2xx success.
+        self.server.next_response = (200, b"ok\n", "text/plain")
+        result = await trigger_rotation(f"{self.base_url}/rotate", timeout_seconds=2.0)
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["response"], {"raw": "ok"})
+
+    async def test_4xx_raises_with_status_and_snippet(self) -> None:
+        self.server.next_response = (
+            429,
+            b'{"error": "rate limited"}',
+            "application/json",
+        )
+        with self.assertRaises(ProxyRotationError) as ctx:
+            await trigger_rotation(f"{self.base_url}/rotate", timeout_seconds=2.0)
+        self.assertIn("429", str(ctx.exception))
+        self.assertIn("rate limited", str(ctx.exception))
+
+    async def test_unreachable_endpoint_raises(self) -> None:
+        with self.assertRaises(ProxyRotationError):
+            await trigger_rotation("http://127.0.0.1:1/rotate", timeout_seconds=1.5)
+
+    async def test_empty_rotation_url_raises(self) -> None:
+        with self.assertRaises(ProxyRotationError):
+            await trigger_rotation("", timeout_seconds=1.0)
 
 
 class EgressSummaryTest(unittest.TestCase):

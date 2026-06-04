@@ -69,19 +69,42 @@ def _normalize_rotation_url(raw: object) -> str | None:
     return text
 
 
-def _redact_rotation_url(raw: str) -> str:
-    """Drop userinfo and query/fragment contents from a rotation URL.
+# Path segments shorter than this are treated as routing verbs (``rotate``,
+# ``refresh``, ``v1``) and kept in the redacted output. Anything longer is
+# almost always an opaque token (``rt_acbc...``, base64, UUID) and gets masked.
+# This is heuristic but errs aggressively on the side of redaction — false
+# positives just make logs less specific; false negatives leak secrets.
+_REDACT_PATH_SEGMENT_THRESHOLD = 16
 
-    Rotation endpoints frequently encode the provider session token in the
-    query string (``?token=...``) or, less often, in the userinfo. Surfacing
-    that in metadata/logs would defeat the purpose of the ``redacted()``
-    layer everywhere else. The path is left intact because it's informative
-    (``/rotate``, ``/refresh``) and rarely sensitive.
+
+def _redact_path_segments(path: str) -> str:
+    """Mask path segments that look like opaque session tokens.
+
+    Provider routing paths are short, lowercase verbs (``/rotate``, ``/v1``,
+    ``/refresh``); session tokens are long alphanumerics (``rt_acbc3a4651…``,
+    UUIDs, base64-ish blobs). Anything ≥16 chars becomes ``***``.
+    """
+    segments = path.split("/")
+    redacted = [
+        ("***" if len(seg) >= _REDACT_PATH_SEGMENT_THRESHOLD else seg)
+        for seg in segments
+    ]
+    return "/".join(redacted)
+
+
+def _redact_rotation_url(raw: str) -> str:
+    """Strip secrets from a rotation URL for safe surfacing in metadata/logs.
+
+    Rotation endpoints embed the provider session token in any of three
+    places: the query string (``?token=…``), the userinfo
+    (``user:token@host``), or a tail path segment (``/rotate/rt_…``, used by
+    e.g. falconproxy). All three are scrubbed; routing verbs and short
+    segments stay so the redacted URL is still recognizable.
     """
     parsed = urlsplit(raw)
     host = parsed.hostname or ""
     port = f":{parsed.port}" if parsed.port else ""
-    path = parsed.path or ""
+    path = _redact_path_segments(parsed.path or "")
     suffix = "?***" if parsed.query else ""
     return f"{parsed.scheme}://{host}{port}{path}{suffix}"
 

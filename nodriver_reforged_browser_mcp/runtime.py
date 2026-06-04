@@ -20,8 +20,14 @@ from .actions import ensure_observers, get_url_and_title
 from .browser import BridgeBrowser
 from .cookies import load_cookie_file
 from .fingerprint import FingerprintConfig
-from .proxy import parse_proxy
-from .proxy_health import ProxyHealthError, egress_summary, probe_proxy
+from .proxy import _redact_rotation_url, parse_proxy
+from .proxy_health import (
+    ProxyHealthError,
+    ProxyRotationError,
+    egress_summary,
+    probe_proxy,
+    trigger_rotation,
+)
 from .state_store import (
     DEFAULT_LAUNCH_CONFIG_NAME,
     BrowserStateStore,
@@ -105,6 +111,70 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _extract_estimated_settle(response: Any) -> float | None:
+    """Pull a settle-time hint out of a provider's rotation response, if any.
+
+    Different providers spell this differently; we accept a few common keys
+    (``estimated_seconds``, ``eta_seconds``, ``ready_in_seconds``) and clamp
+    the result to a sane upper bound so a misbehaving provider can't make the
+    tool sit on the lock forever.
+    """
+    if not isinstance(response, dict):
+        return None
+    for key in ("estimated_seconds", "eta_seconds", "ready_in_seconds", "wait_seconds"):
+        value = response.get(key)
+        if value is None:
+            continue
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            continue
+        if seconds < 0:
+            continue
+        return min(seconds, 60.0)
+    return None
+
+
+async def _probe_with_retry_budget(
+    proxy_config,
+    *,
+    total_budget: float,
+    per_attempt: float = 20.0,
+    backoff: float = 2.0,
+) -> dict[str, Any]:
+    """Probe a rotated proxy, retrying until success or the budget is spent.
+
+    Rotation providers routinely take 5-20s before the new exit IP is live —
+    the data plane is decoupled from the control plane that answers the
+    rotation API. A single 8s probe times out spuriously in that window;
+    retrying every ``backoff`` seconds with the same per-attempt cap covers
+    the warm-up without inflating the launch-time probe budget.
+
+    The last error is re-raised when the budget runs out so callers see an
+    actionable cause (407, timeout, etc.) rather than a generic deadline.
+    """
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + max(total_budget, per_attempt)
+    last_error: ProxyHealthError | None = None
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            break
+        try:
+            return await probe_proxy(
+                proxy_config,
+                timeout_seconds=min(per_attempt, remaining),
+            )
+        except ProxyHealthError as exc:
+            last_error = exc
+            sleep_for = min(backoff, deadline - loop.time())
+            if sleep_for <= 0:
+                break
+            await asyncio.sleep(sleep_for)
+    assert last_error is not None
+    raise last_error
+
+
 def _domain_from_value(value: str | None) -> str | None:
     if not value:
         return None
@@ -180,6 +250,12 @@ class BrowserSession:
     last_known_url: str | None = None
     last_known_title: str | None = None
     policy: dict[str, Any] = field(default_factory=_default_policy)
+    # The fingerprint fields the caller explicitly set at launch (or via
+    # set_fingerprint). Kept separately from ``browser.fingerprint`` so
+    # rotate_proxy can re-derive defaults from a new egress AND still keep
+    # caller-pinned fields winning — the same precedence the launch flow
+    # enforces.
+    user_fingerprint: FingerprintConfig = field(default_factory=FingerprintConfig)
     trace_id: str | None = None
     trace_active: bool = False
     trace_started_at: str | None = None
@@ -1117,6 +1193,7 @@ class BrowserSessionManager:
                 policy=self._new_session_policy(),
                 last_known_url=page.get("url"),
                 last_known_title=page.get("title"),
+                user_fingerprint=user_fingerprint,
             )
             await self._insert_session(session)
             logger.info("Started launch session %s", resolved_session_id)
@@ -1135,6 +1212,11 @@ class BrowserSessionManager:
         config = FingerprintConfig.from_dict(fingerprint)
         async with session.action_lock:
             applied = await session.browser.apply_fingerprint(config)
+            # Whatever the caller asked for here is a user-pinned override
+            # going forward — fold it into the session's user_fingerprint so
+            # a subsequent rotate_proxy keeps it winning over the new
+            # proxy-derived defaults.
+            session.user_fingerprint = session.user_fingerprint.merged_with(config)
             effective = session.browser.fingerprint.to_metadata()
         if isinstance(session.metadata, dict):
             session.metadata["fingerprint"] = effective or None
@@ -1142,6 +1224,139 @@ class BrowserSessionManager:
             "session_id": session.session_id,
             "applied": applied,
             "fingerprint": effective or None,
+        }
+
+    async def rotate_proxy(
+        self,
+        *,
+        session_id: str,
+        realign_identity: bool = True,
+        settle_seconds: float = 2.0,
+        probe_timeout_seconds: float = 90.0,
+    ) -> dict[str, Any]:
+        """Rotate the upstream exit IP and (optionally) re-align identity.
+
+        Provider-side IP rotation is a one-shot GET to the configured
+        ``rotation_url``. We:
+
+        1. Lock the session so no concurrent action sees a half-rotated state.
+        2. Hit the rotation endpoint **directly** (not through the proxy — it
+           is the provider's control plane, not a forward target).
+        3. Wait a short settle window (most providers report success
+           immediately but take ~1-2s for the new IP to actually take over
+           on the data plane).
+        4. Re-probe through the proxy with a retry budget (``probe_timeout_
+           seconds``) to read the new egress IP and identity. Rotated proxies
+           routinely need 5-20s before the new exit is reachable; the retry
+           loop hides that warm-up rather than failing the call. For SOCKS we
+           fall back to the in-browser ipapi lookup since the pre-launch
+           probe didn't speak SOCKS either.
+        5. If asked, apply the new proxy-derived identity (timezone, locale,
+           languages, geo) via ``apply_fingerprint`` — then re-apply the
+           session's stored ``user_fingerprint`` so any caller-pinned field
+           still wins, matching the original launch precedence.
+
+        Returns the old + new egress summaries, the rotation endpoint's
+        (redacted) URL, and the rotation response payload.
+        """
+        session = await self.get_session(session_id)
+        proxy_config = getattr(session.browser, "proxy", None)
+        if proxy_config is None:
+            raise ValueError(
+                f"Session {session_id} has no proxy attached; nothing to rotate."
+            )
+        if not proxy_config.rotation_url:
+            raise ValueError(
+                f"Session {session_id}'s proxy has no rotation_url. Pass "
+                "proxy={..., rotation_url: ...} to session_start to enable rotation."
+            )
+
+        rotation_url = proxy_config.rotation_url
+        redacted_endpoint = _redact_rotation_url(rotation_url)
+
+        async with session.action_lock:
+            old_egress = None
+            if isinstance(session.metadata, dict):
+                old_egress = session.metadata.get("proxy_exit")
+
+            logger.info(
+                "Rotating proxy for session %s via %s",
+                session.session_id,
+                redacted_endpoint,
+            )
+            rotation_result = await trigger_rotation(rotation_url)
+
+            # Some providers (e.g. falconproxy) include an
+            # ``estimated_seconds`` hint in the rotation response that says how
+            # long the data plane needs before the new exit is reachable.
+            # Honour it when present so callers don't have to oversize
+            # ``settle_seconds`` for every provider individually.
+            effective_settle = max(0.0, float(settle_seconds))
+            provider_hint = _extract_estimated_settle(rotation_result.get("response"))
+            if provider_hint is not None:
+                effective_settle = max(effective_settle, provider_hint)
+            if effective_settle > 0:
+                await asyncio.sleep(effective_settle)
+
+            new_egress_data: dict[str, Any] = {}
+            new_egress_summary: dict[str, Any] | None = None
+            if proxy_config.is_socks:
+                # SOCKS can't be HTTP-probed; ask the live browser to do an
+                # in-flight ipapi lookup through the (already-rotated) proxy.
+                new_egress_summary = await session.browser.align_timezone_to_proxy()
+            else:
+                try:
+                    new_egress_data = await _probe_with_retry_budget(
+                        proxy_config,
+                        total_budget=max(1.0, float(probe_timeout_seconds)),
+                    )
+                except ProxyHealthError as exc:
+                    raise ProxyHealthError(
+                        "Rotation request succeeded, but the post-rotation "
+                        f"probe failed: {exc}. The new exit IP may not be "
+                        "active yet, or the proxy may have hard-failed; the "
+                        "browser is still bound to the same proxy."
+                    ) from exc
+                new_egress_summary = egress_summary(new_egress_data)
+
+            identity_applied: dict[str, Any] = {}
+            if realign_identity and new_egress_data:
+                # 1) Push the new proxy-derived defaults onto the live browser.
+                proxy_defaults = FingerprintConfig.from_ipapi(new_egress_data)
+                identity_applied = await session.browser.apply_fingerprint(
+                    proxy_defaults
+                )
+                # 2) Re-assert the caller's pinned fields so they still win,
+                #    matching the original launch flow's precedence.
+                if not session.user_fingerprint.is_empty:
+                    overlay = await session.browser.apply_fingerprint(
+                        session.user_fingerprint
+                    )
+                    identity_applied.update(overlay)
+
+            if isinstance(session.metadata, dict):
+                session.metadata["proxy_exit"] = new_egress_summary
+                session.metadata["proxy_timezone"] = session.browser.timezone_id
+                session.metadata["fingerprint"] = (
+                    session.browser.fingerprint.to_metadata() or None
+                )
+
+        return {
+            "session_id": session.session_id,
+            "rotated_at": _utc_now_iso(),
+            "rotation_endpoint": redacted_endpoint,
+            "rotation_status": rotation_result.get("status"),
+            "rotation_response": rotation_result.get("response"),
+            "old_egress": old_egress,
+            "new_egress": new_egress_summary,
+            "ip_changed": (
+                old_egress is not None
+                and new_egress_summary is not None
+                and old_egress.get("exit_ip") != new_egress_summary.get("exit_ip")
+            )
+            if old_egress and new_egress_summary
+            else None,
+            "identity_applied": identity_applied or None,
         }
 
     async def stop_session(self, *, session_id: str) -> dict[str, Any]:

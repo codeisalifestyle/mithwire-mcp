@@ -199,6 +199,26 @@ class ProxyRotationUrlTest(unittest.TestCase):
         # And the token must NOT leak anywhere in the metadata payload.
         self.assertNotIn("supersecret", str(meta))
 
+    def test_metadata_redacts_long_path_segment(self) -> None:
+        # falconproxy-style: token embedded as a long tail path segment.
+        cfg = parse_proxy(
+            {
+                "server": "http://1.2.3.4:8080",
+                "rotation_url": (
+                    "https://api.falconproxy.com/staging/v1/rotate/"
+                    "rt_acbc3a4651292e507db5b9439882fa97"
+                ),
+            }
+        )
+        assert cfg is not None
+        meta = cfg.to_metadata()
+        # Routing verbs survive; the long token segment is masked.
+        self.assertEqual(
+            meta["rotation_url"],
+            "https://api.falconproxy.com/staging/v1/rotate/***",
+        )
+        self.assertNotIn("acbc3a4651292e507db5b9439882fa97", str(meta))
+
     def test_metadata_redacts_rotation_userinfo(self) -> None:
         cfg = parse_proxy(
             {

@@ -173,12 +173,15 @@ Everything else is an optional flag layered on top of those two:
 - an object: `{ "server": "http://host:port", "username": "...", "password": "...", "rotation_url": "https://api.provider.com/rotate?token=..." }`
 
 `rotation_url` is optional. It's a provider endpoint that rotates the upstream
-exit IP when hit; the MCP stores it on the proxy object so a follow-up tool
-can trigger rotation without re-supplying the URL. It is not invoked
-automatically on launch. Rotation URLs frequently embed a secret token in
-their query string, so the URL is **redacted** anywhere it appears in session
-metadata or logs (userinfo and query are stripped to `?***`); the literal URL
-stays in-memory only.
+exit IP when hit. The MCP stores it on the proxy object at launch; call
+`session_rotate_proxy` to trigger a rotation — it hits the endpoint, waits a
+short settle window, re-probes through the proxy to confirm the new egress,
+and (by default) re-aligns the browser identity (timezone, locale, languages,
+geolocation) to match. Any field you pinned via `fingerprint` at launch (or
+`session_set_fingerprint` since) keeps winning over the proxy-derived default.
+Rotation URLs frequently embed a secret token in their query string, so the
+URL is **redacted** anywhere it appears in session metadata or logs (userinfo
+and query are stripped to `?***`); the literal URL stays in-memory only.
 
 Authenticated **HTTP/HTTPS** proxies are fully supported. Rather than answering
 the proxy challenge per request over CDP (which floods the event loop and stalls
@@ -336,6 +339,7 @@ Client config for this mode:
 - `session_launch_config_set`
 - `session_launch_config_delete`
 - `session_set_fingerprint`
+- `session_rotate_proxy`
 - `session_set_policy`
 - `session_get_policy`
 - `session_set_download_dir`
