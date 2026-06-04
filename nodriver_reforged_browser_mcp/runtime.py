@@ -866,7 +866,7 @@ class BrowserSessionManager:
         cookie_fallback_domain: str | None,
         profile: str | None,
         launch_config: str | None,
-        proxy: str | None = None,
+        proxy: str | dict[str, Any] | None = None,
         fingerprint: dict[str, Any] | None = None,
         webrtc_leak_protection: str | None = None,
     ) -> dict[str, Any]:
@@ -974,7 +974,7 @@ class BrowserSessionManager:
         cookie_fallback_domain: str | None,
         profile: str | None,
         launch_config: str | None,
-        proxy: str | None = None,
+        proxy: str | dict[str, Any] | None = None,
         fingerprint: dict[str, Any] | None = None,
         webrtc_leak_protection: str | None = None,
     ) -> dict[str, Any]:

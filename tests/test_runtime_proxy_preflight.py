@@ -259,6 +259,49 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
         # Timezone wasn't pinned by the profile, so the proxy default still wins.
         self.assertEqual(fp.timezone_id, "Europe/Berlin")
 
+    async def test_dict_form_proxy_carries_rotation_url_through_to_browser(self) -> None:
+        # session_start's ``proxy`` accepts a dict; the rotation_url it
+        # contains must survive normalization and arrive on the live
+        # BridgeBrowser's ProxyConfig (in-memory, verbatim) so a future
+        # rotation tool can use it.
+        observers, url = _patch_observers_and_url()
+        with _patch_browser(), observers, url, patch(
+            "nodriver_reforged_browser_mcp.runtime.probe_proxy",
+            new=AsyncMock(return_value=_EGRESS_DE),
+        ):
+            summary = await self.manager.start_session(
+                session_id="sess_dict_proxy",
+                headless=True,
+                start_url=None,
+                browser_args=None,
+                browser_executable_path=None,
+                sandbox=True,
+                cookie_file=None,
+                cookie_fallback_domain=None,
+                profile=None,
+                launch_config=None,
+                proxy={
+                    "server": "http://1.2.3.4:8080",
+                    "username": "u",
+                    "password": "p",
+                    "rotation_url": "https://api.provider.com/rotate?token=secret",
+                },
+            )
+
+        proxy_config = _StubBrowser.instances[0].proxy
+        self.assertEqual(
+            proxy_config.rotation_url,
+            "https://api.provider.com/rotate?token=secret",
+        )
+        # And the session metadata must surface presence + redacted form,
+        # never the raw token.
+        meta_proxy = summary["metadata"]["proxy"]
+        self.assertTrue(meta_proxy["has_rotation"])
+        self.assertEqual(
+            meta_proxy["rotation_url"], "https://api.provider.com/rotate?***"
+        )
+        self.assertNotIn("secret", str(meta_proxy))
+
     async def test_socks_proxy_falls_back_to_in_browser_alignment(self) -> None:
         # SOCKS probe returns {} (TCP-only check); the manager must then ask
         # the browser to do the ipapi.is lookup through itself.

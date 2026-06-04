@@ -75,8 +75,17 @@ LAUNCH_OPTION_KEYS = (
 _BOOL_LAUNCH_KEYS = {"headless", "sandbox"}
 _LIST_LAUNCH_KEYS = {"browser_args"}
 _DICT_LAUNCH_KEYS = {"fingerprint"}
+# ``proxy`` is a tagged union: a bare URL/colon string for simple cases, or a
+# dict (``{server, username, password, rotation_url, ...}``) when extra fields
+# like rotation_url need to ride along. ``parse_proxy`` already accepts both;
+# the normalizer below just preserves whichever form the user supplied.
+_STRING_OR_DICT_LAUNCH_KEYS = {"proxy"}
 _STRING_LAUNCH_KEYS = (
-    set(LAUNCH_OPTION_KEYS) - _BOOL_LAUNCH_KEYS - _LIST_LAUNCH_KEYS - _DICT_LAUNCH_KEYS
+    set(LAUNCH_OPTION_KEYS)
+    - _BOOL_LAUNCH_KEYS
+    - _LIST_LAUNCH_KEYS
+    - _DICT_LAUNCH_KEYS
+    - _STRING_OR_DICT_LAUNCH_KEYS
 )
 
 
@@ -141,6 +150,25 @@ def normalize_launch_options(values: dict[str, Any] | None) -> dict[str, Any]:
                 normalized[key] = {str(k): v for k, v in raw_value.items() if v is not None}
                 continue
             raise ValueError(f"Launch option '{key}' must be an object.")
+        if key in _STRING_OR_DICT_LAUNCH_KEYS:
+            if raw_value is None:
+                normalized[key] = None
+                continue
+            if isinstance(raw_value, str):
+                text = raw_value.strip()
+                normalized[key] = text or None
+                continue
+            if isinstance(raw_value, dict):
+                # Drop None values so a partially-filled dict merged across
+                # layers doesn't blank out fields with explicit ``null``.
+                cleaned = {
+                    str(k): v for k, v in raw_value.items() if v is not None
+                }
+                normalized[key] = cleaned or None
+                continue
+            raise ValueError(
+                f"Launch option '{key}' must be a string URL or an object."
+            )
         if key in _STRING_LAUNCH_KEYS:
             if raw_value is None:
                 normalized[key] = None

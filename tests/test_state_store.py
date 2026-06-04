@@ -34,6 +34,49 @@ class StateStoreTest(unittest.TestCase):
             self.assertEqual(fetched["values"], saved["values"])
             self.assertEqual(fetched["effective_values"]["start_url"], "https://example.com")
 
+    def test_launch_config_round_trips_dict_proxy_with_rotation_url(self) -> None:
+        # The proxy launch option used to be string-only. It now accepts a
+        # dict so optional fields like ``rotation_url`` can ride along, and
+        # both shapes must survive a save->read round-trip unchanged.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = BrowserStateStore(state_root=tmpdir)
+            saved = store.set_launch_config(
+                config_name="rotating",
+                values={
+                    "proxy": {
+                        "server": "http://1.2.3.4:8080",
+                        "username": "u",
+                        "password": "p",
+                        "rotation_url": "https://api.provider.com/rotate?token=abc",
+                    }
+                },
+            )
+            self.assertIsInstance(saved["values"]["proxy"], dict)
+            self.assertEqual(
+                saved["values"]["proxy"]["rotation_url"],
+                "https://api.provider.com/rotate?token=abc",
+            )
+
+            fetched = store.get_launch_config("rotating")
+            self.assertEqual(fetched["values"]["proxy"], saved["values"]["proxy"])
+
+    def test_launch_config_round_trips_string_proxy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = BrowserStateStore(state_root=tmpdir)
+            saved = store.set_launch_config(
+                config_name="simple",
+                values={"proxy": "http://user:pw@1.2.3.4:8080"},
+            )
+            self.assertEqual(saved["values"]["proxy"], "http://user:pw@1.2.3.4:8080")
+            fetched = store.get_launch_config("simple")
+            self.assertEqual(fetched["values"]["proxy"], "http://user:pw@1.2.3.4:8080")
+
+    def test_dict_proxy_rejects_non_string_non_dict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = BrowserStateStore(state_root=tmpdir)
+            with self.assertRaises(ValueError):
+                store.set_launch_config(config_name="bad", values={"proxy": 42})
+
     def test_profile_alias_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = BrowserStateStore(state_root=tmpdir)

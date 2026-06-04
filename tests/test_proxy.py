@@ -107,5 +107,124 @@ class ParseProxyTest(unittest.TestCase):
         self.assertTrue(meta["has_auth"])
 
 
+class ProxyRotationUrlTest(unittest.TestCase):
+    """``rotation_url`` is an optional per-proxy field. It only attaches via
+    the dict form (string spellings have no unambiguous slot); validation
+    happens at config time, not at rotate time."""
+
+    def test_dict_form_carries_rotation_url(self) -> None:
+        cfg = parse_proxy(
+            {
+                "server": "http://1.2.3.4:8080",
+                "username": "u",
+                "password": "p",
+                "rotation_url": "https://api.provider.com/rotate?token=abc123",
+            }
+        )
+        assert cfg is not None
+        self.assertEqual(
+            cfg.rotation_url, "https://api.provider.com/rotate?token=abc123"
+        )
+        self.assertTrue(cfg.has_rotation)
+
+    def test_dict_form_without_rotation_url_leaves_field_unset(self) -> None:
+        cfg = parse_proxy({"server": "http://1.2.3.4:8080"})
+        assert cfg is not None
+        self.assertIsNone(cfg.rotation_url)
+        self.assertFalse(cfg.has_rotation)
+
+    def test_dict_form_accepts_rotation_alias_key(self) -> None:
+        # Accept the shorter ``rotation`` spelling too — frequent in practice.
+        cfg = parse_proxy(
+            {
+                "server": "http://1.2.3.4:8080",
+                "rotation": "https://api.provider.com/rotate",
+            }
+        )
+        assert cfg is not None
+        self.assertEqual(cfg.rotation_url, "https://api.provider.com/rotate")
+
+    def test_explicit_rotation_overrides_base_when_using_server_url(self) -> None:
+        # A nested URL form behind ``server`` cannot carry its own rotation
+        # URL, but the outer dict can supply one and it must take effect.
+        cfg = parse_proxy(
+            {
+                "server": "http://u:p@1.2.3.4:8080",
+                "rotation_url": "https://api.provider.com/rotate",
+            }
+        )
+        assert cfg is not None
+        self.assertEqual(cfg.username, "u")
+        self.assertEqual(cfg.rotation_url, "https://api.provider.com/rotate")
+
+    def test_string_form_does_not_carry_rotation_url(self) -> None:
+        cfg = parse_proxy("http://u:p@1.2.3.4:8080")
+        assert cfg is not None
+        self.assertIsNone(cfg.rotation_url)
+
+    def test_bad_rotation_scheme_is_rejected(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            parse_proxy(
+                {"server": "http://1.2.3.4:8080", "rotation_url": "ftp://nope/r"}
+            )
+        self.assertIn("http(s)", str(ctx.exception))
+
+    def test_rotation_url_without_host_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_proxy(
+                {"server": "http://1.2.3.4:8080", "rotation_url": "https://"}
+            )
+
+    def test_blank_rotation_url_is_treated_as_unset(self) -> None:
+        cfg = parse_proxy(
+            {"server": "http://1.2.3.4:8080", "rotation_url": "   "}
+        )
+        assert cfg is not None
+        self.assertIsNone(cfg.rotation_url)
+
+    def test_metadata_redacts_rotation_query(self) -> None:
+        cfg = parse_proxy(
+            {
+                "server": "http://1.2.3.4:8080",
+                "rotation_url": "https://api.provider.com/rotate?token=supersecret",
+            }
+        )
+        assert cfg is not None
+        meta = cfg.to_metadata()
+        self.assertTrue(meta["has_rotation"])
+        # The redacted URL keeps host and path but drops query contents.
+        self.assertEqual(
+            meta["rotation_url"], "https://api.provider.com/rotate?***"
+        )
+        # And the token must NOT leak anywhere in the metadata payload.
+        self.assertNotIn("supersecret", str(meta))
+
+    def test_metadata_redacts_rotation_userinfo(self) -> None:
+        cfg = parse_proxy(
+            {
+                "server": "http://1.2.3.4:8080",
+                "rotation_url": "https://user:topsecret@api.provider.com/rotate",
+            }
+        )
+        assert cfg is not None
+        meta = cfg.to_metadata()
+        # Userinfo must be stripped from the redacted form.
+        self.assertNotIn("topsecret", str(meta))
+        self.assertNotIn("user@", str(meta["rotation_url"]))
+
+    def test_in_memory_rotation_url_is_preserved_verbatim(self) -> None:
+        # The literal URL stays usable in-memory; redaction is metadata-only.
+        cfg = parse_proxy(
+            {
+                "server": "http://1.2.3.4:8080",
+                "rotation_url": "https://api.provider.com/rotate?token=keepme",
+            }
+        )
+        assert cfg is not None
+        self.assertEqual(
+            cfg.rotation_url, "https://api.provider.com/rotate?token=keepme"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

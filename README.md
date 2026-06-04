@@ -170,6 +170,15 @@ Everything else is an optional flag layered on top of those two:
 - `http://host:port` or `http://user:pass@host:port`
 - the provider `scheme:host:port:user:pass` form
 - `socks5://host:port`
+- an object: `{ "server": "http://host:port", "username": "...", "password": "...", "rotation_url": "https://api.provider.com/rotate?token=..." }`
+
+`rotation_url` is optional. It's a provider endpoint that rotates the upstream
+exit IP when hit; the MCP stores it on the proxy object so a follow-up tool
+can trigger rotation without re-supplying the URL. It is not invoked
+automatically on launch. Rotation URLs frequently embed a secret token in
+their query string, so the URL is **redacted** anywhere it appears in session
+metadata or logs (userinfo and query are stripped to `?***`); the literal URL
+stays in-memory only.
 
 Authenticated **HTTP/HTTPS** proxies are fully supported. Rather than answering
 the proxy challenge per request over CDP (which floods the event loop and stalls

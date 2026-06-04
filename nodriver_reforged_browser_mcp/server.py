@@ -115,6 +115,10 @@ def create_server(
             "proxy accepts 'http://host:port', 'http://user:pass@host:port', the "
             "provider 'scheme:host:port:user:pass' form, or socks5://host:port "
             "(authenticated SOCKS not wired yet; use the HTTP endpoint). "
+            "It can ALSO be a dict {server, username?, password?, rotation_url?} "
+            "where rotation_url is an optional provider endpoint that rotates "
+            "the upstream exit IP when hit (stored for later use; not invoked "
+            "automatically on launch). "
             "When a proxy is set, the session is REFUSED if the proxy fails a "
             "pre-launch reachability + credentials probe (no half-launched browser, "
             "no fallback to the host's direct connection). On success, the browser "
@@ -142,7 +146,7 @@ def create_server(
         cookie_fallback_domain: str | None = None,
         profile: str | None = None,
         launch_config: str | None = None,
-        proxy: str | None = None,
+        proxy: str | dict[str, Any] | None = None,
         fingerprint: dict[str, Any] | None = None,
         webrtc_leak_protection: str | None = None,
     ) -> dict[str, Any]:

@@ -38,6 +38,53 @@ _SCHEME_ALIASES: dict[str, str] = {
 
 _SOCKS_SCHEMES = {"socks4", "socks5"}
 
+# Rotation URLs almost always live on plain HTTP(S) endpoints exposed by the
+# provider (e.g. ``https://api.provider.com/rotate?token=...``). We refuse any
+# other scheme up front so a typo never silently becomes a no-op at rotate
+# time.
+_VALID_ROTATION_SCHEMES = {"http", "https"}
+
+
+def _normalize_rotation_url(raw: object) -> str | None:
+    """Validate and canonicalize a rotation URL.
+
+    Returns ``None`` for unset/blank input. Raises ``ValueError`` for anything
+    that isn't a syntactically valid ``http(s)://...`` URL — we'd rather fail
+    at config time than at rotate time.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    parsed = urlsplit(text)
+    if parsed.scheme.lower() not in _VALID_ROTATION_SCHEMES:
+        raise ValueError(
+            f"rotation_url must be an http(s) URL, got {text!r}."
+        )
+    if not parsed.hostname:
+        raise ValueError(
+            f"rotation_url is missing a host: {text!r}."
+        )
+    return text
+
+
+def _redact_rotation_url(raw: str) -> str:
+    """Drop userinfo and query/fragment contents from a rotation URL.
+
+    Rotation endpoints frequently encode the provider session token in the
+    query string (``?token=...``) or, less often, in the userinfo. Surfacing
+    that in metadata/logs would defeat the purpose of the ``redacted()``
+    layer everywhere else. The path is left intact because it's informative
+    (``/rotate``, ``/refresh``) and rarely sensitive.
+    """
+    parsed = urlsplit(raw)
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    path = parsed.path or ""
+    suffix = "?***" if parsed.query else ""
+    return f"{parsed.scheme}://{host}{port}{path}{suffix}"
+
 
 @dataclass(frozen=True)
 class ProxyConfig:
@@ -48,6 +95,10 @@ class ProxyConfig:
     port: int
     username: str | None = None
     password: str | None = None
+    # Optional provider endpoint that rotates the upstream exit IP when hit.
+    # Stored verbatim (often carries a secret token in the query string); use
+    # ``to_metadata`` / ``_redact_rotation_url`` when surfacing it externally.
+    rotation_url: str | None = None
 
     @property
     def has_auth(self) -> bool:
@@ -56,6 +107,10 @@ class ProxyConfig:
     @property
     def is_socks(self) -> bool:
         return self.scheme in _SOCKS_SCHEMES
+
+    @property
+    def has_rotation(self) -> bool:
+        return bool(self.rotation_url)
 
     @property
     def server_url(self) -> str:
@@ -72,13 +127,17 @@ class ProxyConfig:
         return self.server_url
 
     def to_metadata(self) -> dict[str, object]:
-        return {
+        data: dict[str, object] = {
             "scheme": self.scheme,
             "host": self.host,
             "port": self.port,
             "has_auth": self.has_auth,
+            "has_rotation": self.has_rotation,
             "redacted": self.redacted(),
         }
+        if self.rotation_url:
+            data["rotation_url"] = _redact_rotation_url(self.rotation_url)
+        return data
 
 
 def _normalize_scheme(raw: str | None) -> str:
@@ -108,6 +167,7 @@ def _build(
     port: object,
     username: str | None,
     password: str | None,
+    rotation_url: object = None,
 ) -> ProxyConfig:
     normalized_scheme = _normalize_scheme(scheme)
     clean_host = (host or "").strip()
@@ -119,6 +179,7 @@ def _build(
         port=_coerce_port(port),
         username=(username or None),
         password=(password or None),
+        rotation_url=_normalize_rotation_url(rotation_url),
     )
     if config.is_socks and config.has_auth:
         raise ValueError(
@@ -130,7 +191,7 @@ def _build(
     return config
 
 
-def _parse_url_form(spec: str) -> ProxyConfig:
+def _parse_url_form(spec: str, *, rotation_url: object = None) -> ProxyConfig:
     parsed = urlsplit(spec)
     return _build(
         scheme=parsed.scheme,
@@ -138,10 +199,11 @@ def _parse_url_form(spec: str) -> ProxyConfig:
         port=parsed.port if parsed.port is not None else "",
         username=unquote(parsed.username) if parsed.username else None,
         password=unquote(parsed.password) if parsed.password else None,
+        rotation_url=rotation_url,
     )
 
 
-def _parse_colon_form(spec: str) -> ProxyConfig:
+def _parse_colon_form(spec: str, *, rotation_url: object = None) -> ProxyConfig:
     """Parse ``scheme:host:port[:user:pass]`` (and the no-scheme variant)."""
     parts = spec.split(":")
     scheme: str | None = None
@@ -167,6 +229,7 @@ def _parse_colon_form(spec: str) -> ProxyConfig:
         port=port,
         username=username,
         password=password,
+        rotation_url=rotation_url,
     )
 
 
@@ -178,15 +241,21 @@ def parse_proxy(spec: object) -> ProxyConfig | None:
     * ``None`` / empty string -> ``None`` (no proxy).
     * an existing :class:`ProxyConfig` (returned unchanged).
     * a mapping with ``scheme``/``host``/``port``/``username``/``password``
-      (or a single ``server`` URL string under the ``server`` key).
+      and an optional ``rotation_url`` (or a single ``server`` URL string
+      under the ``server`` key, again with optional ``rotation_url``).
     * a URL string: ``http://user:pass@host:port``, ``socks5://host:port``.
     * a colon string: ``http:host:port:user:pass`` (the provider format).
+
+    The string forms cannot carry a ``rotation_url`` because there's no
+    unambiguous slot for it; use the dict form (or wrap the string under
+    ``{"server": "...", "rotation_url": "..."}``) to attach one.
     """
     if spec is None:
         return None
     if isinstance(spec, ProxyConfig):
         return spec
     if isinstance(spec, dict):
+        rotation_url = spec.get("rotation_url") or spec.get("rotation")
         server = spec.get("server")
         if server and not spec.get("host"):
             base = parse_proxy(str(server))
@@ -198,6 +267,7 @@ def parse_proxy(spec: object) -> ProxyConfig | None:
                 port=base.port,
                 username=spec.get("username", base.username),
                 password=spec.get("password", base.password),
+                rotation_url=rotation_url if rotation_url is not None else base.rotation_url,
             )
         return _build(
             scheme=spec.get("scheme"),
@@ -205,6 +275,7 @@ def parse_proxy(spec: object) -> ProxyConfig | None:
             port=spec.get("port", ""),
             username=spec.get("username"),
             password=spec.get("password"),
+            rotation_url=rotation_url,
         )
     text = str(spec).strip()
     if not text:
