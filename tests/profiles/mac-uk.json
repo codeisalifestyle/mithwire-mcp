@@ -1,0 +1,23 @@
+{
+  "name": "mac-uk-residential",
+  "timezone_id": "Europe/London",
+  "languages": ["en-GB", "en"],
+  "accept_language": "en-GB,en",
+  "platform": "MacIntel",
+  "screen_width": 2560,
+  "screen_height": 1440,
+  "device_scale_factor": 2.0,
+  "mobile": false,
+  "max_touch_points": 0,
+  "hardware_concurrency": 8,
+  "device_memory": 8,
+  "latitude": 51.5085,
+  "longitude": -0.1257,
+  "geo_accuracy": 50.0,
+  "webgl_vendor": "Google Inc. (Apple)",
+  "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
+  "source": {
+    "preset": "mac-uk-residential",
+    "notes": "same-OS-family Mac/London identity; pairs cleanly with a UK residential or mobile exit"
+  }
+}

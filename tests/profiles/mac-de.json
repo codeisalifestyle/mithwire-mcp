@@ -1,0 +1,23 @@
+{
+  "name": "mac-de-berlin",
+  "timezone_id": "Europe/Berlin",
+  "languages": ["de-DE", "de", "en"],
+  "accept_language": "de-DE,de,en",
+  "platform": "MacIntel",
+  "screen_width": 1680,
+  "screen_height": 1050,
+  "device_scale_factor": 2.0,
+  "mobile": false,
+  "max_touch_points": 0,
+  "hardware_concurrency": 12,
+  "device_memory": 16,
+  "latitude": 52.5200,
+  "longitude": 13.4050,
+  "geo_accuracy": 50.0,
+  "webgl_vendor": "Google Inc. (Apple)",
+  "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Pro, Unspecified Version)",
+  "source": {
+    "preset": "mac-de-berlin",
+    "notes": "same-OS-family Mac/Berlin identity"
+  }
+}

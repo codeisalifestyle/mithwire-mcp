@@ -53,3 +53,6 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "stealth_e2e: spawns a real Chrome (slow; needs google-chrome/chromium). Run explicitly with -m stealth_e2e or skip with -m 'not stealth_e2e'.",
+]

@@ -1,0 +1,23 @@
+{
+  "name": "mac-us-east",
+  "timezone_id": "America/New_York",
+  "languages": ["en-US", "en"],
+  "accept_language": "en-US,en",
+  "platform": "MacIntel",
+  "screen_width": 1920,
+  "screen_height": 1080,
+  "device_scale_factor": 2.0,
+  "mobile": false,
+  "max_touch_points": 0,
+  "hardware_concurrency": 10,
+  "device_memory": 16,
+  "latitude": 40.7128,
+  "longitude": -74.0060,
+  "geo_accuracy": 50.0,
+  "webgl_vendor": "Google Inc. (Apple)",
+  "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)",
+  "source": {
+    "preset": "mac-us-east",
+    "notes": "same-OS-family Mac/NYC identity; baseline US residential profile"
+  }
+}

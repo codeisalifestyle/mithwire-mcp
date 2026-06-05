@@ -1,0 +1,23 @@
+{
+  "name": "mac-jp-tokyo",
+  "timezone_id": "Asia/Tokyo",
+  "languages": ["ja-JP", "ja", "en"],
+  "accept_language": "ja-JP,ja,en",
+  "platform": "MacIntel",
+  "screen_width": 1512,
+  "screen_height": 982,
+  "device_scale_factor": 2.0,
+  "mobile": false,
+  "max_touch_points": 0,
+  "hardware_concurrency": 8,
+  "device_memory": 16,
+  "latitude": 35.6762,
+  "longitude": 139.6503,
+  "geo_accuracy": 50.0,
+  "webgl_vendor": "Google Inc. (Apple)",
+  "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)",
+  "source": {
+    "preset": "mac-jp-tokyo",
+    "notes": "same-OS-family Mac/Tokyo identity; exercises non-Latin language path"
+  }
+}
