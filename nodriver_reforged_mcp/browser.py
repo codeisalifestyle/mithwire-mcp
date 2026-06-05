@@ -1231,7 +1231,12 @@ class BridgeBrowser:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not set timezone override (%s): %s", timezone_id, exc)
 
-    async def align_timezone_to_proxy(self, *, timeout_seconds: float = 20.0) -> dict[str, Any] | None:
+    async def align_timezone_to_proxy(
+        self,
+        *,
+        timeout_seconds: float = 20.0,
+        attempts: int = 3,
+    ) -> dict[str, Any] | None:
         """Detect the proxy egress timezone and pin it in the browser.
 
         With a proxy set, the page's JS timezone still reflects the host machine
@@ -1239,6 +1244,18 @@ class BridgeBrowser:
         bot signal. We query ``api.ipapi.is`` *through the proxy* (so the result
         reflects the egress IP), apply ``setTimezoneOverride``, then return to a
         blank page. Best-effort: a dead proxy or parse failure is non-fatal.
+
+        Mobile / residential proxies routinely return a single transient 502 on
+        the very first request after the upstream session is established (cell
+        re-handshake, IP rotation in flight, edge node warmup). Because this
+        runs ONCE at session start, a single hiccup used to mean no timezone
+        alignment for the entire session -- a real cost: the browser then
+        announces the host TZ over the proxy egress IP, which is one of the
+        cheapest "this is a proxied bot" signals. We retry up to ``attempts``
+        times with a short exponential backoff (0.5 s, 1.5 s, ...). The
+        ``timeout_seconds`` argument is now interpreted as the TOTAL budget
+        across attempts; each attempt gets ``timeout_seconds / attempts`` (with
+        a sane 5 s floor) so a healthy proxy still resolves in one round-trip.
         """
         if self.proxy is None or self.tab is None:
             return None
@@ -1252,11 +1269,50 @@ class BridgeBrowser:
                 return None
             return json.loads(raw)
 
+        # Per-attempt budget. The floor protects against accidentally tight
+        # per-attempt windows (e.g. attempts=4, timeout_seconds=10 -> 2.5 s
+        # which a slow mobile cell will blow through every time).
+        attempts = max(1, int(attempts))
+        per_attempt = max(5.0, float(timeout_seconds) / attempts)
+        # Backoffs are 0 s before the first attempt, then 0.5 s, 1.5 s, 3.5 s,
+        # ... -- short enough that 3 attempts stay well under a minute, long
+        # enough that an edge node has time to settle between hits.
+        backoffs = [0.0] + [0.5 * (2**i + 1) for i in range(attempts - 1)]
+
         data: dict[str, Any] | None = None
-        try:
-            data = await asyncio.wait_for(_detect(), timeout=max(5.0, float(timeout_seconds)))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Proxy timezone detection failed: %s", exc)
+        last_error: BaseException | None = None
+        for i, backoff in enumerate(backoffs):
+            if backoff > 0:
+                await asyncio.sleep(backoff)
+            try:
+                candidate = await asyncio.wait_for(_detect(), timeout=per_attempt)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                logger.debug(
+                    "Proxy timezone detection attempt %d/%d failed: %s",
+                    i + 1, attempts, exc,
+                )
+                continue
+            if isinstance(candidate, dict):
+                data = candidate
+                if i > 0:
+                    logger.info(
+                        "Proxy timezone detection succeeded on attempt %d/%d.",
+                        i + 1, attempts,
+                    )
+                break
+            # _detect returned None (empty body / non-JSON). Treat as a soft
+            # failure and let the loop retry.
+            logger.debug(
+                "Proxy timezone detection attempt %d/%d returned no body.",
+                i + 1, attempts,
+            )
+
+        if data is None and last_error is not None:
+            logger.warning(
+                "Proxy timezone detection gave up after %d attempt(s): %s",
+                attempts, last_error,
+            )
 
         info: dict[str, Any] | None = None
         if isinstance(data, dict):
