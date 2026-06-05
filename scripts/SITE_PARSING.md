@@ -52,8 +52,21 @@ result to exist and never depend on guessing how long a site takes.
   fingerprintjs2 value table, ~23 cells, always styled green). They are *not*
   pass/fail tests — counting them inflates "passed" to a meaningless number.
   Key strictly off `td.result`.
-- **Readiness:** a couple of cells (`advanced-webdriver-result`, `permissions-result`)
-  resolve from promises; poll until no cell's verdict is still `unknown` (~cap 6 s).
+- **Readiness — content + stability, NOT `unknown` polling.** The page's
+  HTML hard-codes `class="failed result"` on *every* result cell at parse
+  time (literally `<td class="failed result" id="permissions-result"></td>`).
+  Each async test (`navigator.permissions.query`,
+  `navigator.permissions.permissions`-style cross-checks, the chrome runtime
+  probe, …) writes its value into `innerText` first, then swaps
+  `failed`→`passed` on success. Visually this is a fraction-of-a-second
+  red-to-green transition. Polling on `verdict === 'unknown'` false-passes
+  on the parse-time `failed`, capturing the red state before JS runs (so a
+  clean headful Chrome wrongly reports `permissions-result: failed`). The
+  robust gate is therefore: (1) every result cell has non-empty `innerText`
+  (test has actually run for that row), AND (2) the `(id, verdict)`
+  signature has been stable for one extra poll cycle (~400 ms) so any
+  in-flight `failed`→`passed` swap has landed. 12 s wall-clock cap so a
+  wedged page can't block the run.
 
 ## CreepJS — `https://abrahamjuliot.github.io/creepjs/`
 

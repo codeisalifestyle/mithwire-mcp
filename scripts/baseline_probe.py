@@ -146,20 +146,54 @@ SANNY_PROBE = r"""
   };
   const collect = () => [...document.querySelectorAll('td.result')].map((td) => ({
     id: td.id, name: name(td), verdict: verdict(td.className),
-    value: (td.innerText || '').trim().slice(0, 40),
+    value: (td.innerText || '').trim(),
   }));
+  // Readiness: the page's HTML hard-codes `class="failed result"` on EVERY
+  // result cell at parse time -- so polling on `verdict === 'unknown'`
+  // false-passes the moment the DOM is parsed. Each test then runs async
+  // (e.g. `permissions-result` awaits navigator.permissions.query()),
+  // writes a value into innerText, and ONLY THEN swaps `failed` -> `passed`
+  // on success. Visually this shows as "red, then turns green within ~1 s"
+  // -- and we used to sample the red state before the swap, reporting
+  // `permissions-result` as failed in clean headful Chrome where it
+  // actually passes.
+  //
+  // The robust readiness signal is therefore content + stability:
+  //   1. Every result cell has non-empty innerText (the test wrote its
+  //      result; the empty initial state is gone), AND
+  //   2. The (id, verdict) signature has not changed for one extra poll
+  //      cycle (no in-flight red->green transitions remain).
+  // We keep a 12 s wall-clock cap so a wedged page never blocks the run.
+  const allFilled = (rows) =>
+    rows.length > 0 && rows.every((r) => r.value.length > 0);
+  const signature = (rows) =>
+    rows.map((r) => r.id + ':' + r.verdict).join(',');
   const deadline = Date.now() + 12000;
   let rows = collect();
-  while (Date.now() < deadline
-      && (rows.length === 0 || rows.some((r) => r.verdict === 'unknown'))) {
-    await sleep(250); rows = collect();
+  let lastSig = '';
+  let stableSince = -1;
+  while (Date.now() < deadline) {
+    if (allFilled(rows)) {
+      const sig = signature(rows);
+      if (sig === lastSig) {
+        if (stableSince < 0) stableSince = Date.now();
+        if (Date.now() - stableSince >= 400) break;
+      } else {
+        lastSig = sig;
+        stableSince = -1;
+      }
+    }
+    await sleep(200);
+    rows = collect();
   }
   return {
     total: rows.length,
     passed: rows.filter((r) => r.verdict === 'passed').length,
     failed: rows.filter((r) => r.verdict === 'failed').map((r) => r.id || r.name),
     warn: rows.filter((r) => r.verdict === 'warn').map((r) => r.id || r.name),
-    rows,
+    // Truncate per-row value for the JSON payload; full text is not needed
+    // for the verdict and would balloon the result file.
+    rows: rows.map((r) => ({ ...r, value: r.value.slice(0, 40) })),
   };
 })()
 """
