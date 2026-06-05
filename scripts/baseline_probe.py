@@ -1,23 +1,33 @@
 #!/usr/bin/env python3
 """Repeatable anti-detect baseline probe.
 
-Runs an identical set of probes across detection sites using one of two drivers
-and writes a normalized JSON result for apples-to-apples comparison:
+Runs an identical set of probes across detection sites using one of three
+drivers and writes a normalized JSON result for apples-to-apples comparison:
 
-* ``raw``    -- a clean Chrome driven over raw CDP with ZERO stealth and no
-               nodriver. The "what naked automation looks like" control.
-* ``bridge`` -- the project's ``BridgeBrowser`` (whatever code is checked out).
-               Run it once at HEAD and once on the working tree to see whether a
-               change is an improvement or a regression.
+* ``raw``      -- a clean Chrome driven over raw CDP with ZERO stealth and
+                 no nodriver. The "what naked automation looks like" floor.
+* ``nodriver`` -- the bare nodriver-reforged engine via ``nodriver.start(...)``
+                 with NO MCP layers (no fingerprint spoof, no proxy relay,
+                 no timezone alignment, no WebRTC guard). Shows what the
+                 engine's always-on stealth gives you on its own.
+* ``bridge``   -- the project's ``BridgeBrowser`` (engine + every MCP layer
+                 stacked on top). Run it once at HEAD and once on the
+                 working tree to see whether a change is an improvement or
+                 a regression.
 
-Every network/CDP step is wrapped in a hard timeout so a wedged proxy or site
-can never hang the run.
+The three columns isolate "what each layer adds": ``raw`` is the floor,
+``nodriver - raw`` is the engine's contribution, ``bridge - nodriver`` is
+the MCP's contribution.
+
+Every network/CDP step is wrapped in a hard timeout so a wedged proxy or
+site can never hang the run.
 
 Usage:
-    python baseline_probe.py --driver raw    --headless --label clean-headless --out /tmp/x.json
-    python baseline_probe.py --driver bridge --headful  --label cur-headful   --out /tmp/y.json
+    python baseline_probe.py --driver raw      --headless --label clean-headless --out /tmp/x.json
+    python baseline_probe.py --driver nodriver --headless --label engine-headless --out /tmp/y.json
+    python baseline_probe.py --driver bridge   --headful  --label cur-headful    --out /tmp/z.json
 
-Compare two result files:
+Compare result files:
     python baseline_probe.py --compare /tmp/a.json /tmp/b.json [/tmp/c.json ...]
 """
 from __future__ import annotations
@@ -606,6 +616,123 @@ class BridgeDriver:
             await self.b.close()
 
 
+class NodriverDriver:
+    """Engine-only driver: bare ``nodriver.start(...)`` with no MCP layers.
+
+    The middle column between ``RawChrome`` and ``BridgeDriver``: it shows
+    what the nodriver-reforged engine alone provides (always-on stealth:
+    native ``navigator.webdriver`` getter via the engine's launch flags,
+    language overrides baked into ``Config``, default browser args) before
+    any MCP layer stacks on top.
+
+    By design it does NOT do any of:
+      * fingerprint spoofing (``FingerprintConfig`` is MCP-only)
+      * proxy auth via the local relay (engine just sets ``--proxy-server``;
+        an authenticated proxy will 407-challenge -- pass an unauth proxy
+        URL when measuring this column)
+      * proxy -> timezone alignment (runtime/MCP)
+      * WebRTC leak protection (MCP)
+      * UA-CH headless brand re-population (MCP fingerprint layer)
+
+    Those dimensions are pinned to ``None`` in the run result so the
+    compare table renders accurately.
+    """
+
+    def __init__(self, *, headless: bool, proxy: str | None) -> None:
+        self.headless = headless
+        self.proxy = proxy
+        self.align_info: Any = None  # bridge-only; left None for the harness
+        self.b: Any = None
+        self.tab: Any = None
+
+    async def start(self) -> None:
+        import nodriver as uc
+
+        browser_args: list[str] = ["--window-size=1920,1080"]
+        if self.proxy:
+            # Engine has no auth relay; an authenticated URL here will
+            # surface as a 407 challenge -- the actual engine-alone
+            # behavior we want to measure.
+            browser_args.append(f"--proxy-server={self.proxy}")
+        self.b = await uc.start(headless=self.headless, browser_args=browser_args)
+        self.tab = self.b.main_tab
+
+    async def navigate(self, url: str, wait: float) -> None:
+        # Tab.get() navigates in place, so handlers attached to ``self.tab``
+        # stay valid across navigations (matches BridgeDriver semantics).
+        await self.tab.get(url)
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+    async def evaluate(self, expr: str) -> Any:
+        return await self.tab.evaluate(
+            expr, await_promise=True, return_by_value=True
+        )
+
+    async def capture_json(
+        self, nav_url: str, url_needle: str, wait: float, body_timeout: float
+    ) -> Any:
+        from nodriver import cdp
+
+        tab = self.tab
+        responses: dict[str, dict] = {}
+        holder: dict[str, Any] = {}
+
+        def on_response(ev: Any) -> None:
+            resp = getattr(ev, "response", None)
+            url = getattr(resp, "url", "") or ""
+            if url_needle in url:
+                responses[str(ev.request_id)] = {
+                    "url": url,
+                    "status": getattr(resp, "status", None),
+                    "mime": getattr(resp, "mime_type", "") or "",
+                }
+
+        async def on_finished(ev: Any) -> None:
+            rid = str(ev.request_id)
+            meta = responses.get(rid)
+            if not meta or holder or "json" not in (meta.get("mime") or ""):
+                return
+            try:
+                body, b64 = await asyncio.wait_for(
+                    tab.send(cdp.network.get_response_body(ev.request_id)),
+                    body_timeout,
+                )
+                if not b64:
+                    parsed = json.loads(body)
+                    if isinstance(parsed, dict):
+                        holder["json"] = parsed
+            except Exception:  # noqa: BLE001
+                return
+
+        tab.add_handler(cdp.network.ResponseReceived, on_response)
+        tab.add_handler(cdp.network.LoadingFinished, on_finished)
+        try:
+            await tab.send(cdp.network.enable())
+            await tab.get(nav_url)
+            deadline = time.monotonic() + wait
+            while time.monotonic() < deadline and "json" not in holder:
+                await asyncio.sleep(0.3)
+            return holder.get("json") or {"ready": False, "error": "no-json-response"}
+        except Exception as exc:  # noqa: BLE001
+            return {"ready": False, "error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            try:
+                tab.remove_handler(cdp.network.ResponseReceived, on_response)
+                tab.remove_handler(cdp.network.LoadingFinished, on_finished)
+            except Exception:  # noqa: BLE001  detach can race teardown
+                pass
+
+    async def close(self) -> None:
+        if self.b is not None:
+            try:
+                # Browser.stop() handles the subprocess gracefully; close()
+                # is also exposed but stop() is the canonical teardown.
+                await self.b.stop()
+            except Exception:  # noqa: BLE001  late-stage races are non-fatal
+                pass
+
+
 # ---------------------------------------------------------------------------
 # Run + compare.
 # ---------------------------------------------------------------------------
@@ -705,13 +832,16 @@ async def run(
     align_to_proxy: bool = False,
     webrtc: str | None = None,
 ) -> dict:
-    # Clean Chrome (raw) can't spoof; spoofing is a bridge-only dimension.
+    # Spoofing, proxy alignment, and WebRTC leak protection are MCP-layer
+    # features -- only the bridge driver can exercise them. The raw and
+    # nodriver columns are pinned to None / off for those dimensions so the
+    # compare output stays honest about which layer added what.
     spoof = bool(fingerprint) and driver_kind == "bridge"
-    # Proxy->identity alignment is also bridge-only (raw Chrome has no relay /
-    # timezone override), and only meaningful when a proxy is actually set.
     align = bool(align_to_proxy) and driver_kind == "bridge" and bool(proxy)
     if driver_kind == "raw":
         driver: Any = RawChrome(headless=headless)
+    elif driver_kind == "nodriver":
+        driver = NodriverDriver(headless=headless, proxy=proxy)
     else:
         driver = BridgeDriver(
             headless=headless, proxy=proxy, fingerprint=fingerprint,
@@ -912,7 +1042,18 @@ def compare(paths: list[str]) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--driver", choices=["raw", "bridge"])
+    ap.add_argument(
+        "--driver",
+        choices=["raw", "nodriver", "bridge"],
+        help=(
+            "raw      = clean Chrome over raw CDP, no nodriver (the 'naked "
+            "automation' floor); "
+            "nodriver = bare nodriver-reforged engine, no MCP layers (shows "
+            "what the engine's always-on stealth gives you alone); "
+            "bridge   = full MCP BridgeBrowser stack (engine + fingerprint + "
+            "proxy relay + timezone alignment + WebRTC guard)."
+        ),
+    )
     ap.add_argument("--headless", action="store_true")
     ap.add_argument("--headful", dest="headless", action="store_false")
     ap.set_defaults(headless=True)
