@@ -82,6 +82,16 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: nodriver-reforged-mcp/uv.lock
+      - name: Allow unprivileged user namespaces (Ubuntu 24.04 AppArmor)
+        # GHA's ubuntu-latest is 24.04, whose AppArmor profile restricts
+        # unprivileged user namespaces -- which is exactly what Chrome's
+        # sandbox needs to fork its zygote. Without this, ``uc.start()``
+        # raises "Failed to start the browser process". We intentionally
+        # do NOT pass ``--no-sandbox``: that flag is trivially fingerprinted
+        # by anti-bot stacks and would make CI test a worse browser than
+        # production. Loosening the AppArmor restriction is the official
+        # Chromium workaround for this exact runner config.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install Chrome
         id: setup-chrome
         uses: browser-actions/setup-chrome@v1
@@ -129,6 +139,12 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: nodriver-reforged-mcp/uv.lock
+      - name: Allow unprivileged user namespaces (Ubuntu 24.04 AppArmor)
+        # See e2e-application job for context: the runner's default AppArmor
+        # profile blocks Chrome's user-namespace sandbox; we relax it instead
+        # of falling back to --no-sandbox (which would itself be a detection
+        # signal, defeating the point of the matrix gate).
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install Chrome
         id: setup-chrome
         uses: browser-actions/setup-chrome@v1
