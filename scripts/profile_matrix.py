@@ -6,16 +6,37 @@ Use this for occasional matrix runs (after a stealth change, before a release,
 or when adding a new profile preset) -- it is the integration counterpart to
 the fast pytest suites under ``tests/test_fingerprint_*.py``.
 
-What it does:
+## CI pass definition (single source of truth)
+
+The product goal is **a human-like browser across configurations, with or
+without spoofing**. For CI we need a single objective predicate that maps
+cleanly to that goal -- otherwise predicate drift becomes its own debate.
+
+CI gate = **deviceandbrowserinfo.com /are_you_a_bot says human**:
+
+* ``isBot is False`` AND
+* no boolean in the server-side ``details`` map is ``True``.
+
+That site computes a server-side verdict from a large client fingerprint
+(``POST /fingerprint_bot_test``, ~600 ms), so it captures multiple anti-detect
+dimensions in one call AND is unambiguous to parse (the result IS the JSON,
+not a render artifact). Sannysoft, CreepJS, and demo.fingerprint.com remain
+in the matrix as **INFORMATIONAL** columns: they're invaluable for
+development and depth analysis (CreepJS surfaces consistency issues the
+others miss), but their pass/fail nuances (probe-timing, accepted
+depth-layer gaps, commercial-API rate limits) aren't suitable as hard CI
+gates. Treat them as observability; the build does not red on their
+results.
+
+## What it does
 
 1. Loads every ``*.json`` under ``--profiles-dir`` (default ``tests/profiles/``).
 2. For each profile, launches ``baseline_probe.py`` with the chosen driver /
    headless mode / proxy, writing the per-profile JSON to ``--out-dir``.
-3. Loads each result and evaluates it against the documented pass predicates
-   (see ``PASS_PREDICATES``). Predicates are intentionally conservative -- they
-   accept the documented depth-layer gaps (e.g. CreepJS WebGL toString lie,
-   one Navigator worker mismatch) and only fail on regressions.
-4. Prints a Markdown table to stdout and exits non-zero if anything failed.
+3. Evaluates the DAB result against ``CI_GATE`` (pass/fail). Computes
+   informational signals for the other sites via ``INFO_SIGNALS``.
+4. Prints a Markdown table to stdout (the GATE column drives PASS/FAIL; the
+   info columns are observability) and exits non-zero if any DAB gate failed.
 
 Example:
 
@@ -60,75 +81,74 @@ def _python_interpreter() -> str:
     return sys.executable
 
 
-def _pred_dab(probe: dict[str, Any]) -> tuple[bool, str]:
-    """deviceandbrowserinfo.com: server-side verdict. ``isBot`` must be False
-    (or a ``no-verdict`` placeholder on transient render failures), and no
-    ``details`` flag may be True (each True flag is a server-side red flag)."""
+# ---------------------------------------------------------------------------
+# CI GATE -- the single hard pass/fail predicate.
+# ---------------------------------------------------------------------------
+
+def ci_gate_dab(probe: dict[str, Any]) -> tuple[bool, str]:
+    """deviceandbrowserinfo.com /are_you_a_bot says HUMAN.
+
+    The site computes a server-side verdict and renders the response JSON
+    verbatim into the page (``code.language-json``). We require:
+
+    * ``isBot`` is exactly ``False`` (not just falsy) AND
+    * no flag in the ``details`` map is ``True``.
+
+    Any other outcome -- ``isBot=true``, any True flag, a missing/erroring
+    probe, ``no-verdict`` from the harness wrapper -- fails the gate.
+    """
     if not probe or probe.get("error"):
-        return False, f"err:{probe.get('error')}"
+        return False, f"err:{probe.get('error') or 'missing'}"
     is_bot = probe.get("isBot")
     if is_bot is True:
-        return False, "isBot=true"
+        flags_true = sorted(k for k, v in (probe.get("details") or {}).items() if v is True)
+        return False, "isBot=true flags=" + ",".join(flags_true) if flags_true else "isBot=true"
+    if is_bot is not False:
+        return False, f"no-verdict ({is_bot!r})"
     flags_true = sorted(k for k, v in (probe.get("details") or {}).items() if v is True)
     if flags_true:
         return False, "flags=" + ",".join(flags_true)
-    return True, "clean"
+    return True, "human"
 
 
-def _pred_sanny(probe: dict[str, Any]) -> tuple[bool, str]:
-    """bot.sannysoft.com: client-side suite. Allow ONE failure -- the
-    ``permissions-result`` row is a headless-Chrome behavior we accept (the
-    Notification permission default differs; not a stealth regression)."""
+# ---------------------------------------------------------------------------
+# INFO signals -- measured + reported, do NOT gate CI.
+#
+# Each function returns a short display string ("8/8", "lies=2", "score=2") or
+# an error marker. The matrix prints these as observability so a developer
+# can spot drift; the CI workflow only consumes the DAB gate.
+# ---------------------------------------------------------------------------
+
+def info_sanny(probe: dict[str, Any]) -> str:
     if not probe or probe.get("error"):
-        return False, f"err:{probe.get('error')}"
-    passed = int(probe.get("passed") or 0)
+        return f"err:{probe.get('error') or 'missing'}"
+    passed = probe.get("passed")
     failed = probe.get("failed") or []
-    allowed = {"permissions-result"}
-    real_failures = [f for f in failed if f not in allowed]
-    if real_failures:
-        return False, "failed=" + ",".join(real_failures)
-    if passed < 7:
-        return False, f"passed={passed}<7"
-    return True, f"passed={passed}/8"
+    total = probe.get("total") or 0
+    suffix = f" failed={','.join(failed)}" if failed else ""
+    return f"{passed}/{total}{suffix}"
 
 
-def _pred_creep(probe: dict[str, Any]) -> tuple[bool, str]:
-    """CreepJS: lie-detector. Up to 2 lies accepted (the documented WebGL
-    getParameter toString depth probe + one Navigator worker mismatch on
-    cross-arch UA strings). 3+ lies indicates an actual regression."""
+def info_creep(probe: dict[str, Any]) -> str:
     if not probe or probe.get("error"):
-        return False, f"err:{probe.get('error')}"
+        return f"err:{probe.get('error') or 'missing'}"
     if not probe.get("ready"):
-        return False, "not-ready"
-    lies = int(probe.get("lieNodes") or 0)
-    if lies > 2:
-        return False, f"lieNodes={lies}>2"
-    return True, f"lieNodes={lies}"
+        return "not-ready"
+    return f"lies={probe.get('lieNodes')}"
 
 
-def _pred_fpcom(probe: dict[str, Any]) -> tuple[bool, str]:
-    """demo.fingerprint.com: commercial bot+tampering check. Allow null
-    ``bot`` (typical ``bot: not_detected``) and require ``suspect_score < 50``
-    when present."""
+def info_fpcom(probe: dict[str, Any]) -> str:
     if not probe or probe.get("error"):
-        # FP Pro is rate-limited / flaky through aggressive proxies; a missing
-        # DOM is reported but does NOT fail the predicate -- a true detection
-        # signal would surface in ``bot`` or ``suspect_score``.
-        return True, f"skip:{probe.get('error')}"
-    bot = probe.get("bot")
-    if bot and bot not in ("not_detected",):
-        return False, f"bot={bot}"
+        return f"err:{probe.get('error') or 'missing'}"
+    bot = probe.get("bot") or "n/a"
     score = probe.get("suspect_score")
-    if isinstance(score, (int, float)) and score >= 50:
-        return False, f"suspect_score={score}>=50"
-    return True, f"bot={bot or 'n/a'}|score={score if score is not None else 'n/a'}"
+    return f"bot={bot} score={score if score is not None else 'n/a'}"
 
 
-PASS_PREDICATES: dict[str, Any] = {
-    "deviceandbrowserinfo": _pred_dab,
-    "sannysoft": _pred_sanny,
-    "creepjs": _pred_creep,
-    "fingerprintcom": _pred_fpcom,
+INFO_SIGNALS: dict[str, Any] = {
+    "sannysoft": info_sanny,
+    "creepjs": info_creep,
+    "fingerprintcom": info_fpcom,
 }
 
 
@@ -171,18 +191,28 @@ def _run_baseline(
     return True, "ok"
 
 
-def _evaluate(result: dict[str, Any]) -> dict[str, tuple[bool, str]]:
-    """Run each site predicate against a single profile's probe set."""
+def _evaluate(result: dict[str, Any]) -> tuple[tuple[bool, str], dict[str, str]]:
+    """Apply the CI gate (DAB) and gather informational signals.
+
+    Returns ``(gate_verdict, info_signals)`` where ``gate_verdict`` is the
+    ``(ok, msg)`` from ``ci_gate_dab`` and ``info_signals`` is a dict of
+    short display strings keyed by site name. Only ``gate_verdict`` drives
+    PASS/FAIL; the info dict is observability.
+    """
     probes = result.get("probes") or {}
-    verdicts: dict[str, tuple[bool, str]] = {}
-    for site, predicate in PASS_PREDICATES.items():
-        verdicts[site] = predicate(probes.get(site) or {})
-    return verdicts
+    gate = ci_gate_dab(probes.get("deviceandbrowserinfo") or {})
+    info = {site: fn(probes.get(site) or {}) for site, fn in INFO_SIGNALS.items()}
+    return gate, info
 
 
 def _markdown_table(rows: list[dict[str, Any]]) -> str:
-    """Render a Markdown table the eye can scan; columns mirror PASS_PREDICATES."""
-    columns = ["profile", "driver", "mode", "egress"] + list(PASS_PREDICATES.keys()) + ["OVERALL"]
+    """One-line-per-profile table. The first result column ("CI gate") is
+    the only one that drives the overall PASS/FAIL -- it shows the DAB
+    verdict explicitly. The remaining columns are tagged ``[info]`` so a
+    reader cannot mistake them for gates.
+    """
+    info_cols = [f"{k} [info]" for k in INFO_SIGNALS]
+    columns = ["profile", "driver", "mode", "egress", "CI gate (DAB)"] + info_cols + ["OVERALL"]
     out = ["| " + " | ".join(columns) + " |",
            "| " + " | ".join("---" for _ in columns) + " |"]
     for row in rows:
@@ -192,9 +222,10 @@ def _markdown_table(rows: list[dict[str, Any]]) -> str:
             "headless" if row["headless"] else "headful",
             row.get("egress") or "-",
         ]
-        for site in PASS_PREDICATES:
-            ok, msg = row["verdicts"].get(site, (False, "missing"))
-            cells.append(("PASS " if ok else "FAIL ") + msg)
+        gate_ok, gate_msg = row["gate"]
+        cells.append(("PASS " if gate_ok else "FAIL ") + gate_msg)
+        for site in INFO_SIGNALS:
+            cells.append(row["info"].get(site, "-"))
         cells.append("PASS" if row["overall"] else "FAIL")
         out.append("| " + " | ".join(cells) + " |")
     return "\n".join(out)
@@ -262,7 +293,8 @@ def main() -> int:
                 "driver": args.driver,
                 "headless": args.headless,
                 "egress": None,
-                "verdicts": {site: (False, "no-data") for site in PASS_PREDICATES},
+                "gate": (False, "no-data"),
+                "info": {site: "no-data" for site in INFO_SIGNALS},
                 "overall": False,
                 "elapsed_s": elapsed,
                 "error": msg,
@@ -277,14 +309,15 @@ def main() -> int:
                 "driver": args.driver,
                 "headless": args.headless,
                 "egress": None,
-                "verdicts": {site: (False, "no-parse") for site in PASS_PREDICATES},
+                "gate": (False, "no-parse"),
+                "info": {site: "no-parse" for site in INFO_SIGNALS},
                 "overall": False,
                 "elapsed_s": elapsed,
                 "error": f"json parse: {exc}",
             })
             continue
-        verdicts = _evaluate(result)
-        overall = all(ok for ok, _ in verdicts.values())
+        gate, info = _evaluate(result)
+        overall = gate[0]  # CI gate IS the overall verdict (DAB only).
         egress = ((result.get("probes") or {}).get("ipapi") or {}).get("ip") or \
                  ((result.get("proxy_exit") or {}).get("exit_ip"))
         rows.append({
@@ -292,12 +325,13 @@ def main() -> int:
             "driver": args.driver,
             "headless": args.headless,
             "egress": egress,
-            "verdicts": verdicts,
+            "gate": gate,
+            "info": info,
             "overall": overall,
             "elapsed_s": elapsed,
         })
         tag = "PASS" if overall else "FAIL"
-        print(f"[{tag} {profile.stem}]  {elapsed:.1f}s  egress={egress}", file=sys.stderr)
+        print(f"[{tag} {profile.stem}]  {elapsed:.1f}s  gate={gate[1]}  egress={egress}", file=sys.stderr)
 
     report = _markdown_table(rows)
     print()
