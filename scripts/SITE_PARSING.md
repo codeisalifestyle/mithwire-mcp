@@ -72,7 +72,13 @@ result to exist and never depend on guessing how long a site takes.
     dotted-quad in the body (audio/network sections contain other numeric fields).
   - **Identity:** `FP ID` (regex `FP ID:\s*([0-9a-f]{16,})`) and the `.fuzzy-fp`
     hash (strip the literal `Fuzzy:` label first — its `F` is a hex char).
-- **Readiness:** gate on the `.fuzzy-fp` hex hash reaching ≥16 chars (cap ~16 s).
+- **Readiness:** gate on the `.fuzzy-fp` hex hash reaching ≥16 chars **AND**
+  containing at least one non-zero hex char (cap ~24 s). The element renders
+  with a placeholder of `0000000000000000` BEFORE CreepJS finishes computing,
+  so a pure length check false-passes the moment the node is inserted — seen
+  through a slow mobile proxy as `fpId=null, fuzzyHash="0000000000000000",
+  lieNodes=0`, which looks like "passed clean" but is really "didn't run."
+  Always pair length with the non-zero pattern check (`/[1-9a-f]/.test(h)`).
 - **Gotcha:** the body literally contains the word "headless" in section labels,
   so testing `/headless/` against body text is **always true** — useless as a
   headless signal. Use the `.lies` categories instead.
@@ -143,28 +149,40 @@ result to exist and never depend on guessing how long a site takes.
 ## demo.fingerprint.com/playground (optional, commercial-grade)
 
 - **How produced:** loads Fingerprint Pro JS, which POSTs to
-  **`/api/event/v4/<id>`**; the response is the full Smart-Signals verdict, which
-  the page then renders into a JSON-view widget.
-- **Best parse — the API response body, NOT the DOM.** Measured (CDP
-  `getResponseBody`), the `/api/event/v4/` JSON is far richer than the rendered
-  text and is the canonical source. Key fields:
-  - `bot` (`"bad"` / `"good"` / `"not_detected"`), `bot_type`
-    (e.g. `"headless_chrome"`), `bot_info.{category,provider,name,confidence}`
-  - `suspect_score` (int), `tampering` + `tampering_details.anti_detect_browser`
-  - `proxy` + `proxy_confidence` + `proxy_details.{proxy_type,provider}`,
-    `vpn`, `virtual_machine`, `incognito`, `ip_blocklist`
-  - `ip_info.v4.geolocation.{timezone,country_code,city_name}`, `asn`,
-    `datacenter_result`; plus `visitor_id` and `confidence.score`
-  - DOM fallback: `data-testid="agentResponseJSON"` / `serverResponseJSON`, or the
-    `.json-view--pair` whose property is `bot`.
-- **Measured note:** clean headless Chrome → `bot:"bad"`,
-  `bot_type:"headless_chrome"`, `suspect_score:9`, `tampering:false`. Also seen:
-  `proxy:true / confidence:"low"` was a **false positive** on a plain residential
-  IP (stale provider data) — treat `proxy`/`vpn` here as low-trust vs api.ipapi.is.
-- **Caveats:** depends on Fingerprint Pro's CDN/API loading (rate-limited) and a
-  React render delay (~5 s). To read it you must capture the response body (the
-  DOM lags and is lossy). Strong commercial signal but flakier — keep it optional,
-  not in the core regression set.
+  **`/api/event/v4/<id>`** from an **OOPIF / service worker**; the server
+  response is the full Smart-Signals verdict, which the page then renders into a
+  react-json-view widget.
+- **Why the old CDP capture stopped working:** the response body now lives in
+  the OOPIF/SW's CDP session. `Network.getResponseBody` from the top-frame
+  session returns **`-32000 "No resource with given identifier found"`** the
+  moment the loadingFinished event fires (measured 2026-06-05). Auto-attaching
+  to every sub-target just to read this one body is heavier and itself a
+  fingerprintable behavior (extra targetCreated/attach traffic).
+- **Robust parse — anchor on the DOM render.** The widget renders into
+  `[data-testid="serverResponseJSON"]` (richer) and
+  `[data-testid="agentResponseJSON"]` (visitor + suspect score). `innerText`
+  on these is NOT strict JSON (no quoted keys, no commas — it's react-json-view
+  text), so do **not** `JSON.parse` it. Instead anchor on the testid root and
+  grab each scalar with a scoped regex (`/\bbot:\s*"([^"]*)"/` etc.). Take the
+  FIRST top-level match per key — nested sections (`ip_info.v4.geolocation`)
+  re-use names like `timezone`. The probe in `baseline_probe.py` (`FP_DOM_PROBE`)
+  does this for `bot, bot_type, suspect_score, tampering, anti_detect_browser,
+  proxy, proxy_confidence, vpn, virtual_machine, incognito, datacenter_result,
+  timezone, country_code, visitor_id`.
+- **Readiness:** `visitor_id:\s*"[A-Za-z0-9]{8,}"` — the widget renders the
+  empty shell BEFORE the `/api/event/v4/` POST resolves; gating on the shell
+  is the same class of false-positive as the CreepJS placeholder bug. Wait
+  ~28 s; the demo's enrichment call typically lands within 5–15 s headful and
+  longer over a slow mobile proxy.
+- **Measured (this repo, headful, no proxy, residential broadband):**
+  `bot:"not_detected"`, `suspect_score:2`, `tampering:false`,
+  `anti_detect_browser:false`, `vpn:false`, `virtual_machine:false`,
+  `incognito:false`. **`proxy:true / confidence:"low"`** is a known
+  **false positive** on a plain residential IP (Fingerprint Pro keeps stale
+  provider data) — treat `proxy`/`vpn` here as low-trust vs api.ipapi.is.
+- **Caveats:** rate-limited commercial API; needs ~5–15 s of render time
+  headful, more headless / through a proxy. Strong commercial signal but
+  flakier — keep it gateable via `--skip-fpcom`.
 
 ## Custom fingerprint spoofing (validation notes)
 

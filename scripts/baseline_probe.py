@@ -97,7 +97,10 @@ NAV_PROBE = r"""
 # fingerprint to /fingerprint_bot_test and renders the returned JSON into a
 # <pre><code class="language-json"> block (Prism-highlighted, but textContent
 # is clean parseable JSON). Anchor on that element -- far safer than grabbing
-# "the first {...} in the body". Self-poll until it parses (the XHR is ~600ms).
+# "the first {...} in the body". Self-poll until it parses.
+# Window: ~600ms direct, but >10s through a mobile proxy (measured the body
+# only starts rendering 4-12s after navigation finishes when bandwidth is
+# constrained). 25s covers a slow mobile cell with margin.
 DAB_PROBE = r"""
 (async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -109,7 +112,7 @@ DAB_PROBE = r"""
     }
     return null;
   };
-  const deadline = Date.now() + 12000;
+  const deadline = Date.now() + 25000;
   let v = read();
   while (!v && Date.now() < deadline) { await sleep(250); v = read(); }
   if (!v) {
@@ -127,6 +130,9 @@ DAB_PROBE = r"""
 # *data* rows (always styled green) -- counting those inflates "passed" and is
 # meaningless, so we key strictly off `td.result`. A couple of cells resolve
 # from promises, so poll until none are still 'unknown'.
+# Window: 6s direct, but ~12s through a mobile proxy (the test scripts pull
+# fp2 first, then start the 8 result-cell tests in sequence — the last cells
+# don't settle until ~8-10s on a constrained link).
 SANNY_PROBE = r"""
 (async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -142,7 +148,7 @@ SANNY_PROBE = r"""
     id: td.id, name: name(td), verdict: verdict(td.className),
     value: (td.innerText || '').trim().slice(0, 40),
   }));
-  const deadline = Date.now() + 6000;
+  const deadline = Date.now() + 12000;
   let rows = collect();
   while (Date.now() < deadline
       && (rows.length === 0 || rows.some((r) => r.verdict === 'unknown'))) {
@@ -172,8 +178,16 @@ CREEP_PROBE = r"""
     // Drop the "Fuzzy:" label first (its 'F' is a hex char and would leak in).
     return e ? (e.innerText || '').replace(/fuzzy:?/i, '').replace(/[^0-9a-f]/gi, '') : '';
   }, '') || '';
-  const deadline = Date.now() + 16000;
-  while (Date.now() < deadline && fuzzyHex().length < 16) { await sleep(300); }
+  // The .fuzzy-fp element renders with a placeholder of 16 zeros BEFORE CreepJS
+  // finishes computing — gating on length alone false-passes on that placeholder
+  // (saw fpId=null, fuzzy='0000000000000000' through a slow proxy). Wait until
+  // the hash has at least one non-zero hex char, so we only "see" the real value.
+  const fuzzyReady = () => {
+    const h = fuzzyHex();
+    return h.length >= 16 && /[1-9a-f]/.test(h);
+  };
+  const deadline = Date.now() + 24000;
+  while (Date.now() < deadline && !fuzzyReady()) { await sleep(300); }
   const txt = safe(() => document.body.innerText, '') || '';
   const lies = safe(() => [...document.querySelectorAll('.lies')], []) || [];
   const categories = lies.map((e) => {
@@ -197,7 +211,7 @@ CREEP_PROBE = r"""
     const m = txt.match(/FP ID:\s*([0-9a-f]{16,})/i); return m ? m[1] : null;
   });
   return {
-    ready: fuzzyHex().length >= 16,
+    ready: fuzzyReady(),
     lieNodes: lies.length,
     lieCategories: categories,
     webrtcLeakIp: webrtcIp,
@@ -277,28 +291,108 @@ WEBRTC_PROBE = r"""
 """
 
 SITES = [
-    # Self-polling probes gate on readiness internally, so the fixed wait only
-    # needs to cover navigation start; the probe (and its _guard timeout) does
-    # the real waiting.
-    ("deviceandbrowserinfo", "https://deviceandbrowserinfo.com/are_you_a_bot", 2.0, DAB_PROBE),
-    ("sannysoft", "https://bot.sannysoft.com/", 1.5, SANNY_PROBE),
-    ("creepjs", "https://abrahamjuliot.github.io/creepjs/", 2.0, CREEP_PROBE),
-    ("ipapi", "https://api.ipapi.is/", 1.5, IPAPI_PROBE),
+    # (key, url, nav_wait_s, probe_js, probe_timeout_s)
+    # Self-polling probes gate on readiness internally, so nav_wait only needs
+    # to cover navigation start; the probe deadline (and probe_timeout below)
+    # does the real waiting. probe_timeout MUST be > the in-JS deadline by a
+    # safety margin so a timely-but-late page isn't cut off by the outer
+    # `_guard` wrapper. Sized for slow mobile-proxy cells (12-20s rendering).
+    ("deviceandbrowserinfo", "https://deviceandbrowserinfo.com/are_you_a_bot",
+     2.0, DAB_PROBE, 32.0),
+    ("sannysoft", "https://bot.sannysoft.com/",
+     1.5, SANNY_PROBE, 18.0),
+    ("creepjs", "https://abrahamjuliot.github.io/creepjs/",
+     2.0, CREEP_PROBE, 32.0),
+    ("ipapi", "https://api.ipapi.is/",
+     1.5, IPAPI_PROBE, 12.0),
 ]
 
 # fingerprint.com (Fingerprint Pro) computes its verdict server-side and POSTs it
-# to /api/event/v4/<id>; the JSON response is far richer than the rendered page.
-# We capture it PASSIVELY via CDP getResponseBody -- a fetch/XHR hook would tamper
-# with the page and inflate fingerprint.com's own `tampering` score. The helper
-# fetches the body the moment the response finishes (Chrome evicts bodies within
-# seconds). On headful/bridge the demo's enrichment call fires ~20s in, so the
-# wait window is generous. (key, url, needle, wait-for-response, body-timeout)
-FP_CAPTURE = ("fingerprintcom", "https://demo.fingerprint.com/playground",
-              "/api/event/v4/", 30.0, 8.0)
+# to /api/event/v4/<id>. Originally we captured that response PASSIVELY via CDP
+# Network.getResponseBody -- but Fingerprint Pro now serves the request from an
+# OOPIF / service worker, and `getResponseBody` from the top-frame CDP session
+# returns -32000 "No resource with given identifier found" because the body
+# lives in a sub-target's session. Auto-attaching to every sub-target just to
+# read this one body is heavier and itself a fingerprintable behavior.
+#
+# The DOM is the reliable path: the demo renders the Smart Signals JSON into
+# `<div data-testid="serverResponseJSON">` (richer) and
+# `<div data-testid="agentResponseJSON">` (visitor + suspect score) via
+# react-json-view. innerText is NOT strict JSON (no quoted keys, no commas),
+# so we anchor on the testid roots and grab each decision-relevant field by
+# a scoped regex. Same signals, no sub-target attach, no fetch/XHR hook (which
+# would itself bump the site's `tampering` score). (key, url, wait-for-render)
+FP_CAPTURE = ("fingerprintcom", "https://demo.fingerprint.com/playground", 30.0)
+
+
+# DOM probe for fingerprint.com — reads the rendered Smart Signals widget and
+# returns the same curated shape `_fp_summary` used to produce, so the downstream
+# `_flatten` / compare table doesn't need any changes. Self-polling on the
+# serverResponseJSON node + a non-placeholder `visitor_id` (the playground
+# renders an empty shell before the API call completes; gating on that shell
+# would false-pass like the CreepJS placeholder bug).
+FP_DOM_PROBE = r"""
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const safe = (f, d=null) => { try { return f(); } catch (e) { return d; } };
+  const rootText = () => safe(() => {
+    const r = document.querySelector('[data-testid="serverResponseJSON"]')
+      || document.querySelector('[data-testid="agentResponseJSON"]');
+    return r ? (r.innerText || r.textContent || '') : '';
+  }, '') || '';
+  const ready = () => {
+    const t = rootText();
+    // Must contain the canonical key AND a non-empty quoted visitor_id (not
+    // the empty-shell placeholder some renders show before the API resolves).
+    return /visitor_id:\s*"[A-Za-z0-9]{8,}"/.test(t);
+  };
+  const deadline = Date.now() + 28000;
+  while (Date.now() < deadline && !ready()) { await sleep(400); }
+  const text = rootText();
+  if (!text) return { ready: false, error: 'no-fp-dom' };
+  // Field-by-field anchored regex. Each probe is scoped (\b<key>:) so a
+  // sibling section that re-uses the same key (e.g. ip_info.v4.geolocation
+  // has its own timezone) doesn't poison the scalar grab. We deliberately
+  // grab the FIRST match for top-level keys, which appear before any nested
+  // duplicates in the rendered text.
+  const grabStr = (k) => { const m = text.match(new RegExp('\\b' + k + ':\\s*"([^"]*)"')); return m ? m[1] : null; };
+  const grabBool = (k) => { const m = text.match(new RegExp('\\b' + k + ':\\s*(true|false)')); return m ? m[1] === 'true' : null; };
+  const grabNum = (k) => { const m = text.match(new RegExp('\\b' + k + ':\\s*(-?\\d+(?:\\.\\d+)?)')); return m ? Number(m[1]) : null; };
+  // bot_type / bot_info nested in `bot_detail` on some payloads; the field
+  // may be absent on `bot: "not_detected"` clean runs — null is the honest
+  // answer, NOT a string "n/a".
+  return {
+    ready: true,
+    bot: grabStr('bot'),
+    bot_type: grabStr('bot_type'),
+    bot_name: grabStr('name'),
+    suspect_score: grabNum('suspect_score'),
+    tampering: grabBool('tampering'),
+    anti_detect_browser: grabBool('anti_detect_browser'),
+    proxy: grabBool('proxy'),
+    proxy_confidence: grabStr('proxy_confidence'),
+    proxy_provider: grabStr('provider'),
+    vpn: grabBool('vpn'),
+    virtual_machine: grabBool('virtual_machine'),
+    incognito: grabBool('incognito'),
+    datacenter: grabBool('datacenter_result'),
+    ip_timezone: grabStr('timezone'),
+    ip_country: grabStr('country_code'),
+    visitor_id: grabStr('visitor_id'),
+  };
+})()
+"""
 
 
 def _fp_summary(raw: Any) -> dict:
-    """Curate the decision-relevant Smart-Signals fields from the API response."""
+    """Curate the decision-relevant Smart-Signals fields from the API response.
+
+    .. note::
+        Kept for any external caller that still captures the raw
+        ``/api/event/v4/`` body. The harness itself now uses the DOM probe
+        (``FP_DOM_PROBE``) because Fingerprint Pro serves the response from
+        an OOPIF/SW that the top-frame CDP session cannot body-fetch.
+    """
     if not isinstance(raw, dict):
         return {"ready": False, "error": "non-dict"}
     if raw.get("ready") is False or "error" in raw:
@@ -864,7 +958,7 @@ async def run(
     # Record what the alignment step detected (egress ip/tz/city/country).
     result["proxy_exit"] = getattr(driver, "align_info", None)
     try:
-        for i, (key, url, wait, probe) in enumerate(SITES):
+        for i, (key, url, wait, probe, probe_to) in enumerate(SITES):
             await _guard(f"nav {key}", driver.navigate(url, wait), 40)
             # Capture the navigator/fingerprint probe on the first real (https,
             # secure-context) site so userAgentData and deviceMemory are present.
@@ -873,20 +967,23 @@ async def run(
                     await _guard("navigator", driver.evaluate(_wrap(NAV_PROBE)), 15)
                 )
             result["probes"][key] = _parse(
-                await _guard(key, driver.evaluate(_wrap(probe)), 20)
+                await _guard(key, driver.evaluate(_wrap(probe)), probe_to)
             )
         # Deterministic WebRTC leak check on the current (https) page, after ICE
         # gathering completes -- independent of CreepJS's racy snapshot.
         result["probes"]["webrtc"] = _parse(
             await _guard("webrtc", driver.evaluate(_wrap(WEBRTC_PROBE)), 15)
         )
-        # fingerprint.com: sourced from its server response, captured passively.
+        # fingerprint.com: read the rendered Smart Signals JSON from the DOM.
+        # Was a passive CDP body capture, but Fingerprint Pro now serves the
+        # /api/event/v4/ POST from an OOPIF/SW that the top-frame session can't
+        # body-fetch (-32000); the DOM render carries the same fields.
         if not skip_fpcom:
-            key, url, needle, wait, body_to = FP_CAPTURE
-            raw = await _guard(
-                key, driver.capture_json(url, needle, wait, body_to), wait + body_to + 6
+            key, url, wait = FP_CAPTURE
+            await _guard(f"nav {key}", driver.navigate(url, 0), 40)
+            result["probes"][key] = _parse(
+                await _guard(key, driver.evaluate(_wrap(FP_DOM_PROBE)), wait + 6)
             )
-            result["probes"][key] = _fp_summary(raw)
     finally:
         await _guard("close", driver.close(), 20)
     return result
