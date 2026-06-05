@@ -1,0 +1,171 @@
+name: CI
+
+# Triggers and concurrency:
+# - Every push to main + every PR against main runs the full pipeline.
+# - In-flight runs for the same ref are cancelled when a newer push lands,
+#   so a developer rapidly amending a PR does not stack up CI minutes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Reusable parts are inlined per-job rather than factored into a composite
+# action: the workflow is short, factoring obscures the actual setup steps
+# from a reader scanning the CI for what runs, and three slightly different
+# jobs would each need their own composite override anyway.
+
+jobs:
+  # -----------------------------------------------------------------------
+  # 1. Fast unit tests -- no Chrome. Layer A + the existing test_proxy /
+  #    test_runtime / test_align_timezone_retry / etc. suites. This is the
+  #    gate we want every PR to clear in under a minute so iteration stays
+  #    cheap. Anything tagged ``stealth_e2e`` is excluded (those need Chrome).
+  # -----------------------------------------------------------------------
+  unit-fast:
+    name: Unit tests (no Chrome)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out engine (satisfies [tool.uv.sources] = ../nodriver-reforged)
+        uses: actions/checkout@v4
+        with:
+          repository: codeisalifestyle/nodriver-reforged
+          path: nodriver-reforged
+      - name: Check out MCP
+        uses: actions/checkout@v4
+        with:
+          path: nodriver-reforged-mcp
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: nodriver-reforged-mcp/uv.lock
+      - name: Install Python + dependencies
+        working-directory: nodriver-reforged-mcp
+        run: uv sync --group dev
+      - name: Run fast unit tests
+        working-directory: nodriver-reforged-mcp
+        run: uv run pytest -m 'not stealth_e2e' --maxfail=1
+
+  # -----------------------------------------------------------------------
+  # 2. Stealth e2e tests -- spawn a real Chrome via BridgeBrowser and read
+  #    the live navigator surface (Layer A: ``test_fingerprint_application``).
+  #    Validates that every FingerprintConfig field actually reaches the
+  #    browser. Tagged ``stealth_e2e`` so it is opt-in for the fast lane.
+  # -----------------------------------------------------------------------
+  e2e-application:
+    name: Stealth e2e (real Chrome)
+    runs-on: ubuntu-latest
+    needs: unit-fast
+    timeout-minutes: 10
+    steps:
+      - name: Check out engine
+        uses: actions/checkout@v4
+        with:
+          repository: codeisalifestyle/nodriver-reforged
+          path: nodriver-reforged
+      - name: Check out MCP
+        uses: actions/checkout@v4
+        with:
+          path: nodriver-reforged-mcp
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: nodriver-reforged-mcp/uv.lock
+      - name: Install Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+      - name: Install Python + dependencies
+        working-directory: nodriver-reforged-mcp
+        run: uv sync --group dev
+      - name: Run stealth e2e tests
+        working-directory: nodriver-reforged-mcp
+        env:
+          # setup-chrome exposes the binary path; pass it through to the
+          # ``_chrome_available`` resolver in tests so we never accidentally
+          # pick a hidden host-default Chrome instead of the pinned one.
+          CHROME: ${{ steps.setup-chrome.outputs.chrome-path }}
+        run: uv run pytest tests/test_fingerprint_application.py -v
+
+  # -----------------------------------------------------------------------
+  # 3. Anti-detect matrix -- the product-level gate. The CI pass definition
+  #    is: deviceandbrowserinfo.com /are_you_a_bot says HUMAN for every
+  #    preset profile. Sannysoft, CreepJS, and Fingerprint Pro are still
+  #    measured (see the matrix's info columns) but DO NOT gate CI -- they
+  #    are developer observability.
+  #
+  #    --skip-fpcom drops the rate-limited commercial API. Profile presets
+  #    live under ``tests/profiles/*.json`` and ride along with the repo.
+  # -----------------------------------------------------------------------
+  detection-matrix:
+    name: Anti-detect matrix (DAB gate)
+    runs-on: ubuntu-latest
+    needs: unit-fast
+    timeout-minutes: 15
+    steps:
+      - name: Check out engine
+        uses: actions/checkout@v4
+        with:
+          repository: codeisalifestyle/nodriver-reforged
+          path: nodriver-reforged
+      - name: Check out MCP
+        uses: actions/checkout@v4
+        with:
+          path: nodriver-reforged-mcp
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: nodriver-reforged-mcp/uv.lock
+      - name: Install Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+      - name: Install Python + dependencies
+        working-directory: nodriver-reforged-mcp
+        run: uv sync --group dev
+      - name: Run anti-detect matrix
+        id: matrix
+        working-directory: nodriver-reforged-mcp
+        env:
+          CHROME: ${{ steps.setup-chrome.outputs.chrome-path }}
+        # Headless + no proxy keeps the matrix self-contained for CI.
+        # ``--report`` writes the Markdown table for the job summary so
+        # reviewers see per-profile DAB verdicts at a glance.
+        run: |
+          uv run python scripts/profile_matrix.py \
+            --driver bridge \
+            --headless \
+            --skip-fpcom \
+            --report /tmp/matrix-report.md
+      - name: Publish matrix report to job summary
+        if: always()
+        run: |
+          {
+            echo "## Anti-detect matrix"
+            echo ""
+            echo "**CI pass definition:** deviceandbrowserinfo.com /are_you_a_bot reports HUMAN for every profile."
+            echo ""
+            if [ -f /tmp/matrix-report.md ]; then cat /tmp/matrix-report.md; else echo "(no report produced)"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload per-profile JSON artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-matrix-results
+          path: /tmp/profile-matrix/*.json
+          if-no-files-found: ignore
+          retention-days: 14

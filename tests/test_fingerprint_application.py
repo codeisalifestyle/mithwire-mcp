@@ -161,6 +161,13 @@ class FingerprintApplicationTest(unittest.IsolatedAsyncioTestCase):
         kwargs: dict[str, Any] = {"headless": True}
         if fp is not None:
             kwargs["fingerprint"] = fp
+        # In CI, ``setup-chrome`` exports a pinned Chrome path via the ``CHROME``
+        # env var. Honouring it here keeps the test bound to the pinned binary
+        # rather than whatever nodriver auto-discovers in the runner image (a
+        # different chromium build can have subtly different headless behavior).
+        chrome_path = os.environ.get("CHROME")
+        if chrome_path and os.path.exists(chrome_path):
+            kwargs["browser_executable_path"] = chrome_path
         browser = BridgeBrowser(**kwargs)
         await browser.start()
         # Two nudges before reading: (1) ``set_user_agent_override`` applies to
