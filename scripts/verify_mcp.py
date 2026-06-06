@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stealth verification harness for nodriver-reforged-mcp.
+"""Stealth verification harness for mithwire-mcp.
 
 Drives a real ``BridgeBrowser`` (the exact launch path the MCP uses) against
 public bot-detection services and asserts the critical signals are clean. Use it
@@ -33,8 +33,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nodriver_reforged_mcp.browser import BridgeBrowser  # noqa: E402
-from nodriver_reforged_mcp.proxy import parse_proxy  # noqa: E402
+from mithwire_mcp.browser import BridgeBrowser  # noqa: E402
+from mithwire_mcp.proxy import parse_proxy  # noqa: E402
 
 SUSPECT_SCORE_THRESHOLD = 20
 

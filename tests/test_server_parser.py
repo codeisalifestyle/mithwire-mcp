@@ -2,7 +2,7 @@ import asyncio
 import tempfile
 import unittest
 
-from nodriver_reforged_mcp.server import build_parser, create_server
+from mithwire_mcp.server import build_parser, create_server
 
 
 class ServerParserTest(unittest.TestCase):

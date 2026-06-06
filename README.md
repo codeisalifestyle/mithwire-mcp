@@ -1,8 +1,8 @@
-# nodriver-reforged-mcp
+# mithwire-mcp
 
 🚀 MCP server that gives AI clients full access to a live Chromium browser environment.
 
-Your AI client launches fresh, isolated browser sessions — ephemeral by default, or backed by a persistent managed profile when you need a durable logged-in identity. It is built for autonomous automation, developer workflows, and production-style browser operations, powered by `nodriver-reforged`.
+Your AI client launches fresh, isolated browser sessions — ephemeral by default, or backed by a persistent managed profile when you need a durable logged-in identity. It is built for autonomous automation, developer workflows, and production-style browser operations, powered by `mithwire`.
 
 ## Demo Video
 
@@ -10,7 +10,7 @@ Your AI client launches fresh, isolated browser sessions — ephemeral by defaul
 
 ## 🌟 Product Highlights
 
-`nodriver-reforged-mcp` turns browser automation into a reliable MCP service your agents can trust in real workflows, not just demos.
+`mithwire-mcp` turns browser automation into a reliable MCP service your agents can trust in real workflows, not just demos.
 
 ### 🧠 Intelligent Chromium orchestration
 
@@ -33,9 +33,9 @@ Your AI client launches fresh, isolated browser sessions — ephemeral by defaul
 - Fine-tune launch behavior with configurable browser flags, executable paths, headless/sandbox settings, and first-class proxy support (incl. authenticated HTTP/HTTPS proxies).
 - Preserve realistic, persistent browser identity across sessions for multi-account and high-continuity automation.
 
-### 🕵️ Stealth foundation with nodriver-reforged + CDP
+### 🕵️ Stealth foundation with mithwire + CDP
 
-- Powered by `nodriver-reforged`: a maintained no-WebDriver/no-Selenium Chromium automation runtime.
+- Powered by `mithwire`: a maintained no-WebDriver/no-Selenium Chromium automation runtime.
 - Includes anti-bot oriented capabilities, including Cloudflare Turnstile solving through `browser_solve_cloudflare`.
 - **Control the full identity**: IP (authenticated proxy via local relay), location (proxy-aligned timezone), language, and device profile (fingerprint spoofing) — kept internally consistent across workers and headers.
 - **WebRTC leak protection** stops the host's real IP from leaking around the proxy.
@@ -46,7 +46,7 @@ Your AI client launches fresh, isolated browser sessions — ephemeral by defaul
 
 ### 1) Install prerequisites
 
-- Python `>=3.10` (Python `3.14+` is supported with the latest `nodriver-reforged`)
+- Python `>=3.10` (Python `3.14+` is supported with the latest `mithwire`)
 - A Chromium-based browser installed (Chrome, Brave or Edge)
 - Optional but recommended: `pipx` (for easy isolated CLI installs)
 
@@ -71,28 +71,28 @@ py -m pip install --user pipx
 py -m pipx ensurepath
 ```
 
-### 2) Install `nodriver-reforged-mcp`
+### 2) Install `mithwire-mcp`
 
 Option A (recommended): install with `pipx`
 
 ```bash
-pipx install "git+https://github.com/codeisalifestyle/nodriver-reforged.git#subdirectory=packages/nodriver-reforged-mcp"
+pipx install "git+https://github.com/codeisalifestyle/mithwire.git#subdirectory=packages/mithwire-mcp"
 ```
 
 Option B (no `pipx`): install in a dedicated virtual environment
 
 ```bash
-python3 -m venv ~/.venvs/nodriver-reforged-mcp
-source ~/.venvs/nodriver-reforged-mcp/bin/activate
-pip install "git+https://github.com/codeisalifestyle/nodriver-reforged.git#subdirectory=packages/nodriver-reforged-mcp"
+python3 -m venv ~/.venvs/mithwire-mcp
+source ~/.venvs/mithwire-mcp/bin/activate
+pip install "git+https://github.com/codeisalifestyle/mithwire.git#subdirectory=packages/mithwire-mcp"
 ```
 
-> **Note:** `nodriver-reforged-mcp` lives inside the [`nodriver-reforged`](https://github.com/codeisalifestyle/nodriver-reforged) monorepo as of v0.2. The install URL points at the `packages/nodriver-reforged-mcp` subdirectory of that repo.
+> **Note:** `mithwire-mcp` lives inside the [`mithwire`](https://github.com/codeisalifestyle/mithwire) monorepo as of v0.2. The install URL points at the `packages/mithwire-mcp` subdirectory of that repo.
 
 Verify:
 
 ```bash
-nodriver-reforged-mcp --help
+mithwire-mcp --help
 ```
 
 ### 3) Add it to your MCP client
@@ -102,8 +102,8 @@ Most MCP-enabled clients accept a config shaped like this:
 ```json
 {
   "mcpServers": {
-    "nodriver-reforged-mcp": {
-      "command": "nodriver-reforged-mcp",
+    "mithwire-mcp": {
+      "command": "mithwire-mcp",
       "args": ["--transport", "stdio"]
     }
   }
@@ -114,10 +114,10 @@ If your client cannot find the command, use an absolute path:
 
 ```bash
 # macOS / Linux
-which nodriver-reforged-mcp
+which mithwire-mcp
 
 # Windows (PowerShell)
-where.exe nodriver-reforged-mcp
+where.exe mithwire-mcp
 ```
 
 Then set `"command"` to that full path.
@@ -125,7 +125,7 @@ Then set `"command"` to that full path.
 If you used Option B, your command path is typically:
 
 ```bash
-~/.venvs/nodriver-reforged-mcp/bin/nodriver-reforged-mcp
+~/.venvs/mithwire-mcp/bin/mithwire-mcp
 ```
 
 ### 4) First-use test in your AI client
@@ -274,11 +274,11 @@ separate cookie operations are **injection** (`cookie_file` at launch, or
 
 ## Centralized browser state store
 
-`nodriver-reforged-mcp` now keeps reusable browser state in one place:
+`mithwire-mcp` now keeps reusable browser state in one place:
 
-- Default root: `~/.nodriver-reforged-mcp`
-- Override with env var: `NODRIVER_REFORGED_BROWSER_MCP_HOME=/custom/path`
-- Override per server run: `nodriver-reforged-mcp --state-root /custom/path`
+- Default root: `~/.mithwire-mcp`
+- Override with env var: `MITHWIRE_MCP_HOME=/custom/path`
+- Override per server run: `mithwire-mcp --state-root /custom/path`
 
 Within that root:
 
@@ -299,14 +299,14 @@ This lets your AI client map account-oriented tasks to stable browser identities
 
 ## Development setup
 
-`nodriver-reforged-mcp` is developed inside the [`nodriver-reforged`](https://github.com/codeisalifestyle/nodriver-reforged) `uv` workspace, so the engine and the MCP can be edited together with no pin-bumping.
+`mithwire-mcp` is developed inside the [`mithwire`](https://github.com/codeisalifestyle/mithwire) `uv` workspace, so the engine and the MCP can be edited together with no pin-bumping.
 
 ```bash
-git clone https://github.com/codeisalifestyle/nodriver-reforged.git
-cd nodriver-reforged
+git clone https://github.com/codeisalifestyle/mithwire.git
+cd mithwire
 uv sync                            # creates .venv at repo root, installs both packages editable
-uv run pytest packages/nodriver-reforged-mcp/tests -q
-uv run nodriver-reforged-mcp --transport stdio
+uv run pytest packages/mithwire-mcp/tests -q
+uv run mithwire-mcp --transport stdio
 ```
 
 Client config for this mode:
@@ -314,8 +314,8 @@ Client config for this mode:
 ```json
 {
   "mcpServers": {
-    "nodriver-reforged-mcp": {
-      "command": "/absolute/path/to/nodriver-reforged-mcp",
+    "mithwire-mcp": {
+      "command": "/absolute/path/to/mithwire-mcp",
       "args": ["--transport", "stdio"]
     }
   }
@@ -401,9 +401,9 @@ Client config for this mode:
 
 ## Troubleshooting
 
-- **"command not found: nodriver-reforged-mcp"**
+- **"command not found: mithwire-mcp"**
   - Run `pipx ensurepath`, restart terminal and AI client, then retry.
-  - Use absolute command path from `which nodriver-reforged-mcp`.
+  - Use absolute command path from `which mithwire-mcp`.
 - **Python version mismatch**
   - Use a supported Python (`>=3.10`) and reinstall/upgrade the package in your MCP environment.
 - **Browser fails to launch in restricted environments**

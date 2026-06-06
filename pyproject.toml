@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nodriver-reforged-mcp"
+name = "mithwire-mcp"
 version = "0.1.0"
 description = "MCP browser bridge that gives AI clients full access to a live browser environment."
 readme = "README.md"
@@ -12,27 +12,18 @@ license = { text = "MIT" }
 authors = [{ name = "codeisalifestyle" }]
 dependencies = [
   "mcp>=1.26.0,<2",
-  "nodriver-reforged>=0.50,<0.60",
+  "mithwire>=0.50,<0.60",
   "opencv-python>=4.8,<5",
 ]
 
 [project.scripts]
-nodriver-reforged-mcp = "nodriver_reforged_mcp.server:main"
-
-# Multi-repo development: while the engine is unpublished (or when you're
-# iterating on both layers at once), uv pulls the engine from the sibling
-# checkout below. `uv build` strips [tool.uv.sources] so this never reaches
-# the published wheel — it only affects local development. Comment the
-# block out (or delete it) once `nodriver-reforged` is on PyPI and you no
-# longer want a local override.
-[tool.uv.sources]
-nodriver-reforged = { path = "../nodriver-reforged", editable = true }
+mithwire-mcp = "mithwire_mcp.server:main"
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["nodriver_reforged_mcp*"]
+include = ["mithwire_mcp*"]
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]

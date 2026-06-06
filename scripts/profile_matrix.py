@@ -235,7 +235,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--profiles-dir", type=Path, default=DEFAULT_PROFILES_DIR,
                         help="Directory of FingerprintConfig JSON files (default: tests/profiles/).")
-    parser.add_argument("--driver", choices=["nodriver", "bridge"], default="bridge",
+    parser.add_argument("--driver", choices=["mithwire", "bridge"], default="bridge",
                         help="Stealth driver under test. ``raw`` is excluded -- it has no spoof layer.")
     parser.add_argument("--headless", action="store_true", help="Run Chrome headless (CI-friendly).")
     parser.add_argument("--headful", dest="headless", action="store_false",

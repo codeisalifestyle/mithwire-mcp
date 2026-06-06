@@ -39,8 +39,8 @@ from typing import Any
 
 import pytest
 
-from nodriver_reforged_mcp.browser import BridgeBrowser
-from nodriver_reforged_mcp.fingerprint import FingerprintConfig
+from mithwire_mcp.browser import BridgeBrowser
+from mithwire_mcp.fingerprint import FingerprintConfig
 
 pytestmark = pytest.mark.stealth_e2e
 
@@ -163,7 +163,7 @@ class FingerprintApplicationTest(unittest.IsolatedAsyncioTestCase):
             kwargs["fingerprint"] = fp
         # In CI, ``setup-chrome`` exports a pinned Chrome path via the ``CHROME``
         # env var. Honouring it here keeps the test bound to the pinned binary
-        # rather than whatever nodriver auto-discovers in the runner image (a
+        # rather than whatever mithwire auto-discovers in the runner image (a
         # different chromium build can have subtly different headless behavior).
         chrome_path = os.environ.get("CHROME")
         if chrome_path and os.path.exists(chrome_path):

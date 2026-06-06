@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import unittest
 
-from nodriver_reforged_mcp.fingerprint import (
+from mithwire_mcp.fingerprint import (
     FingerprintConfig,
     accept_language_csv,
     languages_for_country,

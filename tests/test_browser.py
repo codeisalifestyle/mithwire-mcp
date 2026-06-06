@@ -3,8 +3,8 @@ import signal
 import unittest
 from unittest.mock import MagicMock, patch
 
-from nodriver_reforged_mcp.browser import BridgeBrowser
-from nodriver_reforged_mcp.proxy import parse_proxy
+from mithwire_mcp.browser import BridgeBrowser
+from mithwire_mcp.proxy import parse_proxy
 
 
 class ProxyArgTest(unittest.IsolatedAsyncioTestCase):
@@ -16,7 +16,7 @@ class ProxyArgTest(unittest.IsolatedAsyncioTestCase):
         browser = BridgeBrowser(headless=True, proxy=proxy)
 
         # Fail the launch right after kwargs are captured; we only care about args.
-        with patch("nodriver.start", side_effect=RuntimeError("stop")) as mock_start:
+        with patch("mithwire.start", side_effect=RuntimeError("stop")) as mock_start:
             with self.assertRaises(RuntimeError):
                 await browser.start()
 
@@ -31,7 +31,7 @@ class ProxyArgTest(unittest.IsolatedAsyncioTestCase):
         browser = BridgeBrowser(headless=True, proxy=proxy)
 
         try:
-            with patch("nodriver.start", side_effect=RuntimeError("stop")) as mock_start:
+            with patch("mithwire.start", side_effect=RuntimeError("stop")) as mock_start:
                 with self.assertRaises(RuntimeError):
                     await browser.start()
 
@@ -52,7 +52,7 @@ class ProxyArgTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_proxy_means_no_proxy_arg(self) -> None:
         browser = BridgeBrowser(headless=True)
-        with patch("nodriver.start", side_effect=RuntimeError("stop")) as mock_start:
+        with patch("mithwire.start", side_effect=RuntimeError("stop")) as mock_start:
             with self.assertRaises(RuntimeError):
                 await browser.start()
         args = mock_start.call_args.kwargs.get("browser_args", [])
@@ -65,7 +65,7 @@ class StartNoSandboxFallbackTest(unittest.IsolatedAsyncioTestCase):
         sandbox disabled (a --no-sandbox browser is trivially bot-detectable)."""
         browser = BridgeBrowser(headless=True, sandbox=True)
 
-        with patch("nodriver.start", side_effect=RuntimeError("boom")) as mock_start:
+        with patch("mithwire.start", side_effect=RuntimeError("boom")) as mock_start:
             with self.assertRaises(RuntimeError) as ctx:
                 await browser.start()
 

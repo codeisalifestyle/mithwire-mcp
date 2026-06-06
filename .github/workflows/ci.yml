@@ -35,25 +35,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Check out engine (satisfies [tool.uv.sources] = ../nodriver-reforged)
+      - name: Check out engine (satisfies [tool.uv.sources] = ../mithwire)
         uses: actions/checkout@v4
         with:
-          repository: codeisalifestyle/nodriver-reforged
-          path: nodriver-reforged
+          repository: codeisalifestyle/mithwire
+          path: mithwire
       - name: Check out MCP
         uses: actions/checkout@v4
         with:
-          path: nodriver-reforged-mcp
+          path: mithwire-mcp
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          cache-dependency-glob: nodriver-reforged-mcp/uv.lock
+          cache-dependency-glob: mithwire-mcp/uv.lock
       - name: Install Python + dependencies
-        working-directory: nodriver-reforged-mcp
+        working-directory: mithwire-mcp
         run: uv sync --group dev
       - name: Run fast unit tests
-        working-directory: nodriver-reforged-mcp
+        working-directory: mithwire-mcp
         run: uv run pytest -m 'not stealth_e2e' --maxfail=1
 
   # -----------------------------------------------------------------------
@@ -71,17 +71,17 @@ jobs:
       - name: Check out engine
         uses: actions/checkout@v4
         with:
-          repository: codeisalifestyle/nodriver-reforged
-          path: nodriver-reforged
+          repository: codeisalifestyle/mithwire
+          path: mithwire
       - name: Check out MCP
         uses: actions/checkout@v4
         with:
-          path: nodriver-reforged-mcp
+          path: mithwire-mcp
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          cache-dependency-glob: nodriver-reforged-mcp/uv.lock
+          cache-dependency-glob: mithwire-mcp/uv.lock
       - name: Allow unprivileged user namespaces (Ubuntu 24.04 AppArmor)
         # GHA's ubuntu-latest is 24.04, whose AppArmor profile restricts
         # unprivileged user namespaces -- which is exactly what Chrome's
@@ -98,10 +98,10 @@ jobs:
         with:
           chrome-version: stable
       - name: Install Python + dependencies
-        working-directory: nodriver-reforged-mcp
+        working-directory: mithwire-mcp
         run: uv sync --group dev
       - name: Run stealth e2e tests
-        working-directory: nodriver-reforged-mcp
+        working-directory: mithwire-mcp
         env:
           # setup-chrome exposes the binary path; pass it through to the
           # ``_chrome_available`` resolver in tests so we never accidentally
@@ -128,17 +128,17 @@ jobs:
       - name: Check out engine
         uses: actions/checkout@v4
         with:
-          repository: codeisalifestyle/nodriver-reforged
-          path: nodriver-reforged
+          repository: codeisalifestyle/mithwire
+          path: mithwire
       - name: Check out MCP
         uses: actions/checkout@v4
         with:
-          path: nodriver-reforged-mcp
+          path: mithwire-mcp
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          cache-dependency-glob: nodriver-reforged-mcp/uv.lock
+          cache-dependency-glob: mithwire-mcp/uv.lock
       - name: Allow unprivileged user namespaces (Ubuntu 24.04 AppArmor)
         # See e2e-application job for context: the runner's default AppArmor
         # profile blocks Chrome's user-namespace sandbox; we relax it instead
@@ -151,11 +151,11 @@ jobs:
         with:
           chrome-version: stable
       - name: Install Python + dependencies
-        working-directory: nodriver-reforged-mcp
+        working-directory: mithwire-mcp
         run: uv sync --group dev
       - name: Run anti-detect matrix
         id: matrix
-        working-directory: nodriver-reforged-mcp
+        working-directory: mithwire-mcp
         env:
           CHROME: ${{ steps.setup-chrome.outputs.chrome-path }}
         # Headless + no proxy keeps the matrix self-contained for CI.

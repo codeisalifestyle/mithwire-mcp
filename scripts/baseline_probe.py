@@ -5,8 +5,8 @@ Runs an identical set of probes across detection sites using one of three
 drivers and writes a normalized JSON result for apples-to-apples comparison:
 
 * ``raw``      -- a clean Chrome driven over raw CDP with ZERO stealth and
-                 no nodriver. The "what naked automation looks like" floor.
-* ``nodriver`` -- the bare nodriver-reforged engine via ``nodriver.start(...)``
+                 no mithwire. The "what naked automation looks like" floor.
+* ``mithwire`` -- the bare mithwire engine via ``mithwire.start(...)``
                  with NO MCP layers (no fingerprint spoof, no proxy relay,
                  no timezone alignment, no WebRTC guard). Shows what the
                  engine's always-on stealth gives you on its own.
@@ -16,7 +16,7 @@ drivers and writes a normalized JSON result for apples-to-apples comparison:
                  a regression.
 
 The three columns isolate "what each layer adds": ``raw`` is the floor,
-``nodriver - raw`` is the engine's contribution, ``bridge - nodriver`` is
+``mithwire - raw`` is the engine's contribution, ``bridge - mithwire`` is
 the MCP's contribution.
 
 Every network/CDP step is wrapped in a hard timeout so a wedged proxy or
@@ -24,7 +24,7 @@ site can never hang the run.
 
 Usage:
     python baseline_probe.py --driver raw      --headless --label clean-headless --out /tmp/x.json
-    python baseline_probe.py --driver nodriver --headless --label engine-headless --out /tmp/y.json
+    python baseline_probe.py --driver mithwire --headless --label engine-headless --out /tmp/y.json
     python baseline_probe.py --driver bridge   --headful  --label cur-headful    --out /tmp/z.json
 
 Compare result files:
@@ -458,7 +458,7 @@ def _fp_summary(raw: Any) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Driver: clean Chrome over raw CDP (no nodriver, no stealth).
+# Driver: clean Chrome over raw CDP (no mithwire, no stealth).
 # ---------------------------------------------------------------------------
 
 def _free_port() -> int:
@@ -629,7 +629,7 @@ class RawChrome:
 
 
 # ---------------------------------------------------------------------------
-# Driver: the project's BridgeBrowser (nodriver + our stealth).
+# Driver: the project's BridgeBrowser (mithwire + our stealth).
 # ---------------------------------------------------------------------------
 
 class BridgeDriver:
@@ -657,15 +657,15 @@ class BridgeDriver:
         self.b: Any = None
 
     async def start(self) -> None:
-        from nodriver_reforged_mcp.browser import BridgeBrowser
-        from nodriver_reforged_mcp.proxy import parse_proxy
+        from mithwire_mcp.browser import BridgeBrowser
+        from mithwire_mcp.proxy import parse_proxy
 
         kwargs: dict[str, Any] = {"headless": self.headless, "proxy": parse_proxy(self.proxy)}
         if self.webrtc:
             kwargs["webrtc_leak_protection"] = self.webrtc
         if self.fingerprint:
             # Imported from the same checkout as BridgeBrowser (honors --package-dir).
-            from nodriver_reforged_mcp.fingerprint import FingerprintConfig
+            from mithwire_mcp.fingerprint import FingerprintConfig
 
             kwargs["fingerprint"] = FingerprintConfig.from_dict(self.fingerprint)
         self.b = BridgeBrowser(**kwargs)
@@ -689,7 +689,7 @@ class BridgeDriver:
 
     async def capture_json(self, nav_url: str, url_needle: str, wait: float, body_timeout: float) -> Any:
         """Passively capture a response body via CDP (no page tampering) and parse it."""
-        from nodriver import cdp
+        from mithwire import cdp
 
         tab = self.b.tab
         responses: dict[str, dict] = {}   # request_id (str) -> {url,status,mime}
@@ -745,10 +745,10 @@ class BridgeDriver:
 
 
 class NodriverDriver:
-    """Engine-only driver: bare ``nodriver.start(...)`` with no MCP layers.
+    """Engine-only driver: bare ``mithwire.start(...)`` with no MCP layers.
 
     The middle column between ``RawChrome`` and ``BridgeDriver``: it shows
-    what the nodriver-reforged engine alone provides (always-on stealth:
+    what the mithwire engine alone provides (always-on stealth:
     native ``navigator.webdriver`` getter via the engine's launch flags,
     language overrides baked into ``Config``, default browser args) before
     any MCP layer stacks on top.
@@ -774,7 +774,7 @@ class NodriverDriver:
         self.tab: Any = None
 
     async def start(self) -> None:
-        import nodriver as uc
+        import mithwire as uc
 
         browser_args: list[str] = ["--window-size=1920,1080"]
         if self.proxy:
@@ -800,7 +800,7 @@ class NodriverDriver:
     async def capture_json(
         self, nav_url: str, url_needle: str, wait: float, body_timeout: float
     ) -> Any:
-        from nodriver import cdp
+        from mithwire import cdp
 
         tab = self.tab
         responses: dict[str, dict] = {}
@@ -877,7 +877,7 @@ async def _guard(name: str, coro, timeout: float) -> Any:
 def _wrap(expr: str) -> str:
     """Force the probe to return a JSON string.
 
-    nodriver's ``evaluate(return_by_value=True)`` hands back a RemoteObject for
+    mithwire's ``evaluate(return_by_value=True)`` hands back a RemoteObject for
     nested objects, whereas raw CDP returns the plain value. Returning a string
     from the page serializes identically across both drivers; we ``json.loads``
     it in Python for a uniform shape.
@@ -962,13 +962,13 @@ async def run(
 ) -> dict:
     # Spoofing, proxy alignment, and WebRTC leak protection are MCP-layer
     # features -- only the bridge driver can exercise them. The raw and
-    # nodriver columns are pinned to None / off for those dimensions so the
+    # mithwire columns are pinned to None / off for those dimensions so the
     # compare output stays honest about which layer added what.
     spoof = bool(fingerprint) and driver_kind == "bridge"
     align = bool(align_to_proxy) and driver_kind == "bridge" and bool(proxy)
     if driver_kind == "raw":
         driver: Any = RawChrome(headless=headless)
-    elif driver_kind == "nodriver":
+    elif driver_kind == "mithwire":
         driver = NodriverDriver(headless=headless, proxy=proxy)
     else:
         driver = BridgeDriver(
@@ -1175,11 +1175,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--driver",
-        choices=["raw", "nodriver", "bridge"],
+        choices=["raw", "mithwire", "bridge"],
         help=(
-            "raw      = clean Chrome over raw CDP, no nodriver (the 'naked "
+            "raw      = clean Chrome over raw CDP, no mithwire (the 'naked "
             "automation' floor); "
-            "nodriver = bare nodriver-reforged engine, no MCP layers (shows "
+            "mithwire = bare mithwire engine, no MCP layers (shows "
             "what the engine's always-on stealth gives you alone); "
             "bridge   = full MCP BridgeBrowser stack (engine + fingerprint + "
             "proxy relay + timezone alignment + WebRTC guard)."
@@ -1235,7 +1235,7 @@ def main() -> None:
         help=(
             "Import the 'bridge' BridgeBrowser from this package dir instead of "
             "the installed/working-tree one. Point it at a git worktree's "
-            "'packages/nodriver-reforged-mcp' to baseline another ref "
+            "'packages/mithwire-mcp' to baseline another ref "
             "without checking it out (no stash/checkout churn)."
         ),
     )

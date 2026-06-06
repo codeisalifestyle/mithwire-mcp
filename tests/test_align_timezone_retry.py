@@ -20,8 +20,8 @@ import unittest
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-from nodriver_reforged_mcp.browser import BridgeBrowser
-from nodriver_reforged_mcp.proxy import parse_proxy
+from mithwire_mcp.browser import BridgeBrowser
+from mithwire_mcp.proxy import parse_proxy
 
 
 def _ipapi_payload(tz: str = "Europe/London", ip: str = "92.40.172.42") -> str:
@@ -84,7 +84,7 @@ class _PatchedAligner:
         )
         # Patch the ``asyncio.sleep`` reference in the browser module, not the
         # global one -- patching the global slows the WHOLE test process.
-        self._sleep = patch("nodriver_reforged_mcp.browser.asyncio.sleep", new=AsyncMock(return_value=None))
+        self._sleep = patch("mithwire_mcp.browser.asyncio.sleep", new=AsyncMock(return_value=None))
         self._goto.start()
         self._apply.start()
         self._sleep.start()
