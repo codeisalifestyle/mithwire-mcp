@@ -1,93 +1,96 @@
-# mithwire-mcp
+<p align="center">
+  <img src="assets/mithwire-mcp-banner.png" alt="mithwire-mcp" width="720">
+</p>
 
-🚀 MCP server that gives AI clients full access to a live Chromium browser environment.
+<p align="center"><b>mithwire-mcp — the LLM access layer for a fleet of anti-detect browsers.</b><br>
+An MCP server that lets your AI agents launch, drive, and manage many stealth
+Chromium browsers — each with its own identity, proxy, and persistent state.</p>
 
-Your AI client launches fresh, isolated browser sessions — ephemeral by default, or backed by a persistent managed profile when you need a durable logged-in identity. It is built for autonomous automation, developer workflows, and production-style browser operations, powered by `mithwire`.
+<p align="center">
+  <a href="https://pypi.org/project/mithwire-mcp/"><img src="https://img.shields.io/pypi/v/mithwire-mcp?color=000&label=pypi" alt="PyPI"></a>
+  <a href="https://pypi.org/project/mithwire-mcp/"><img src="https://img.shields.io/pypi/pyversions/mithwire-mcp?color=000" alt="Python versions"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-000" alt="License"></a>
+  <a href="https://github.com/codeisalifestyle/mithwire"><img src="https://img.shields.io/badge/engine-mithwire-000" alt="mithwire engine"></a>
+</p>
 
-## Demo Video
+---
 
-[Watch demo video](https://gumlet.tv/watch/69c5aa1eb365493ac0849b50/)
+## What is mithwire-mcp?
 
-## 🌟 Product Highlights
+[`mithwire`](https://github.com/codeisalifestyle/mithwire) is an **anti-detect
+browser**. `mithwire-mcp` is the **layer that lets an LLM agent operate a whole
+fleet of them.**
 
-`mithwire-mcp` turns browser automation into a reliable MCP service your agents can trust in real workflows, not just demos.
+It speaks the [Model Context Protocol](https://modelcontextprotocol.io), so any
+MCP-capable client (Claude, Cursor, your own agent, …) can ask it to spin up
+isolated browser sessions, navigate and interact with pages, and manage durable
+browser identities — without you writing any browser-automation glue. Every
+session is a brand-new, isolated browser process; the MCP never touches a browser
+it didn't spawn.
 
-### 🧠 Intelligent Chromium orchestration
+It's built for autonomous agents, scraping pipelines, multi-account workflows,
+E2E prototyping, and production-style browser operations.
 
-- Launch fresh sessions instantly with `session_start` — always a brand-new, isolated browser process.
-- One simple choice: ephemeral (default) or a persistent managed `profile`. No flaky attach/clone paths to reason about.
-- Run with confidence using robust session lifecycle controls (`start`, `list`, `get`, `stop`, `stop_all`) and per-session action locking.
-- Stay out of the user's way: the MCP never touches, attaches to, or tears down a browser it didn't spawn.
+> Want the lower-level Python engine instead of an MCP server? That's
+> **[mithwire](https://github.com/codeisalifestyle/mithwire)**.
 
-### 🤖 Built for autonomous agents and fast-moving teams
+## Demo
 
-- Give agents deterministic control over navigate/query/click/type/wait/evaluate/screenshot flows.
-- Ship faster with first-class support for E2E prototyping, scraping pipelines, regression checks, and interactive debugging.
-- Get live operational visibility with console output, request metadata, and CDP-level network capture.
-- Reduce flaky runs and shorten feedback loops across development and QA.
+[Watch the demo video](https://gumlet.tv/watch/69c5aa1eb365493ac0849b50/)
 
-### 👤 Durable browser identity and session state
+## Highlights
 
-- Centralize reusable browser state under one roof: `profiles/` and `configs/`.
-- A managed `profile` persists its own cookies and storage natively across runs — no separate cookie bookkeeping required.
-- Fine-tune launch behavior with configurable browser flags, executable paths, headless/sandbox settings, and first-class proxy support (incl. authenticated HTTP/HTTPS proxies).
-- Preserve realistic, persistent browser identity across sessions for multi-account and high-continuity automation.
+### 🧠 Manage a fleet, not a single browser
+- Launch fresh isolated sessions on demand with `session_start` — each its own browser process.
+- One simple choice per session: **ephemeral** (default) or a persistent managed **`profile`**. No flaky attach/clone paths.
+- Full lifecycle control (`session_start`, `session_list`, `session_get`, `session_stop`, `session_stop_all`) with per-session action locking.
+- The MCP never attaches to, takes over, or kills a browser it didn't launch.
 
-### 🕵️ Stealth foundation with mithwire + CDP
+### 🤖 Built for autonomous agents
+- Deterministic navigate / query / click / type / wait / evaluate / screenshot flows.
+- First-class for scraping pipelines, E2E prototyping, regression checks, and interactive debugging.
+- Live operational visibility: console output, request metadata, and CDP-level network capture.
 
-- Powered by `mithwire`: a maintained no-WebDriver/no-Selenium Chromium automation runtime.
-- Includes anti-bot oriented capabilities, including Cloudflare Turnstile solving through `browser_solve_cloudflare`.
-- **Control the full identity**: IP (authenticated proxy via local relay), location (proxy-aligned timezone), language, and device profile (fingerprint spoofing) — kept internally consistent across workers and headers.
+### 👤 Durable identity & state
+- Reusable browser state in one place: `profiles/` and `configs/` under a single state root.
+- A managed `profile` persists cookies and storage natively across runs — no separate cookie bookkeeping.
+- Tune launch behavior: browser flags, executable path, headless/sandbox, and first-class proxy support (incl. authenticated HTTP/HTTPS).
+
+### 🕵️ Stealth that stays consistent across the fleet
+- Powered by `mithwire`: no-WebDriver/no-Selenium Chromium control, with Cloudflare Turnstile solving (`browser_solve_cloudflare`).
+- **Control the full identity** — IP (authenticated proxy via local relay), location (proxy-aligned timezone), language, and device profile (fingerprint spoofing) — kept internally consistent across workers and headers.
 - **WebRTC leak protection** stops the host's real IP from leaking around the proxy.
-- Built on direct CDP control for low-level precision, observability, and flexibility.
-- Better suited for modern websites where reliability under anti-automation pressure matters.
+- Built on direct CDP control for low-level precision and observability.
 
-## Quick Start (recommended)
+## Quick start
 
-### 1) Install prerequisites
+### 1) Prerequisites
 
-- Python `>=3.10` (Python `3.14+` is supported with the latest `mithwire`)
-- A Chromium-based browser installed (Chrome, Brave or Edge)
-- Optional but recommended: `pipx` (for easy isolated CLI installs)
+- Python `>=3.10` (`3.14+` works with the latest `mithwire`)
+- A Chromium-based browser installed (Chrome, Brave, or Edge)
+- Optional but recommended: [`pipx`](https://pipx.pypa.io) for isolated CLI installs
 
-Install `pipx` (optional, recommended) on macOS:
+### 2) Install
 
-```bash
-brew install pipx
-pipx ensurepath
-```
-
-Install `pipx` (optional, recommended) on Linux:
+Recommended (isolated, with `pipx`):
 
 ```bash
-python3 -m pip install --user pipx
-python3 -m pipx ensurepath
+pipx install mithwire-mcp
 ```
 
-Install `pipx` (optional, recommended) on Windows (PowerShell):
-
-```powershell
-py -m pip install --user pipx
-py -m pipx ensurepath
-```
-
-### 2) Install `mithwire-mcp`
-
-Option A (recommended): install with `pipx`
-
-```bash
-pipx install "git+https://github.com/codeisalifestyle/mithwire.git#subdirectory=packages/mithwire-mcp"
-```
-
-Option B (no `pipx`): install in a dedicated virtual environment
+Or into a virtual environment:
 
 ```bash
 python3 -m venv ~/.venvs/mithwire-mcp
 source ~/.venvs/mithwire-mcp/bin/activate
-pip install "git+https://github.com/codeisalifestyle/mithwire.git#subdirectory=packages/mithwire-mcp"
+pip install mithwire-mcp
 ```
 
-> **Note:** `mithwire-mcp` lives inside the [`mithwire`](https://github.com/codeisalifestyle/mithwire) monorepo as of v0.2. The install URL points at the `packages/mithwire-mcp` subdirectory of that repo.
+To track the latest unreleased changes, install straight from git:
+
+```bash
+pipx install "git+https://github.com/codeisalifestyle/mithwire-mcp.git"
+```
 
 Verify:
 
@@ -110,39 +113,24 @@ Most MCP-enabled clients accept a config shaped like this:
 }
 ```
 
-If your client cannot find the command, use an absolute path:
+If your client can't find the command, use an absolute path (`which mithwire-mcp`
+on macOS/Linux, `where.exe mithwire-mcp` on Windows) as the `"command"`. With the
+venv install above, that's typically `~/.venvs/mithwire-mcp/bin/mithwire-mcp`.
 
-```bash
-# macOS / Linux
-which mithwire-mcp
+### 4) Smoke test from your agent
 
-# Windows (PowerShell)
-where.exe mithwire-mcp
-```
+After reloading your client, ask it to:
 
-Then set `"command"` to that full path.
+1. Call `session_start` with default settings.
+2. Call `browser_navigate` to `https://example.com`.
+3. Call `browser_snapshot`.
+4. Call `session_stop`.
 
-If you used Option B, your command path is typically:
-
-```bash
-~/.venvs/mithwire-mcp/bin/mithwire-mcp
-```
-
-### 4) First-use test in your AI client
-
-After reloading/restarting your AI client, ask it:
-
-1. "Call `session_start` with default settings."
-2. "Call `browser_navigate` to `https://example.com`."
-3. "Call `browser_snapshot`."
-4. "Call `session_stop`."
-
-If these succeed, installation is complete.
+If those succeed, you're set.
 
 ## Launching a session
 
-The MCP **always spawns a brand-new, isolated browser process**. It never
-attaches to, takes over, or shuts down a browser it didn't launch. There are no
+The MCP **always spawns a brand-new, isolated browser process.** There are no
 "modes" to memorize — `session_start` has exactly two shapes:
 
 | Goal | Call | What you get |
@@ -150,7 +138,7 @@ attaches to, takes over, or shuts down a browser it didn't launch. There are no
 | Throwaway browser (default) | `{}` | A fresh ephemeral browser with no saved state. Ideal for scraping and E2E. |
 | Persistent identity | `{ "profile": "twitter_main" }` | A managed profile whose cookies/storage persist across runs. |
 
-Everything else is an optional flag layered on top of those two:
+Everything else is an optional flag on top of those two:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
@@ -172,21 +160,20 @@ Everything else is an optional flag layered on top of those two:
 - `socks5://host:port`
 - an object: `{ "server": "http://host:port", "username": "...", "password": "...", "rotation_url": "https://api.provider.com/rotate?token=..." }`
 
-`rotation_url` is optional. It's a provider endpoint that rotates the upstream
-exit IP when hit. The MCP stores it on the proxy object at launch; call
-`session_rotate_proxy` to trigger a rotation — it hits the endpoint, waits a
-short settle window, re-probes through the proxy to confirm the new egress,
-and (by default) re-aligns the browser identity (timezone, locale, languages,
-geolocation) to match. Any field you pinned via `fingerprint` at launch (or
-`session_set_fingerprint` since) keeps winning over the proxy-derived default.
-Rotation URLs frequently embed a secret token in their query string, so the
-URL is **redacted** anywhere it appears in session metadata or logs (userinfo
-and query are stripped to `?***`); the literal URL stays in-memory only.
+`rotation_url` is optional — a provider endpoint that rotates the upstream exit IP
+when hit. The MCP stores it on the proxy object at launch; call
+`session_rotate_proxy` to trigger a rotation — it hits the endpoint, waits a short
+settle window, re-probes through the proxy to confirm the new egress, and (by
+default) re-aligns the browser identity (timezone, locale, languages, geolocation)
+to match. Anything you pinned via `fingerprint` (or `session_set_fingerprint`)
+keeps winning over the proxy-derived default. Rotation URLs frequently embed a
+secret token, so the URL is **redacted** anywhere it appears in session metadata
+or logs (userinfo and query stripped to `?***`); the literal URL stays in-memory only.
 
 Authenticated **HTTP/HTTPS** proxies are fully supported. Rather than answering
 the proxy challenge per request over CDP (which floods the event loop and stalls
-heavy page loads), the MCP starts a small **local authenticating relay**:
-Chromium is pointed at `127.0.0.1`, and the relay injects the upstream
+heavy page loads), the MCP starts a small **local authenticating relay**: Chromium
+is pointed at `127.0.0.1`, and the relay injects the upstream
 `Proxy-Authorization` header and pipes bytes through to the real proxy. The
 browser never sees a `407`. Unauthenticated HTTP/HTTPS and SOCKS proxies go
 straight to `--proxy-server`. Authenticated **SOCKS** is rejected up front
@@ -195,31 +182,26 @@ HTTP/HTTPS endpoint instead.
 
 **Pre-launch proxy health check.** A session that asks for a proxy is **refused
 before any browser is spawned** if that proxy is unreachable or rejects the
-credentials. The MCP issues a single absolute-form `GET http://api.ipapi.is/`
-to the proxy (with `Proxy-Authorization` when present) and only proceeds on a
-clean 2xx with parseable JSON. There is **no fallback to the host's direct
-connection** — that would silently leak the real IP into login flows and
-cross-contaminate any persistent profile. A bad proxy fails fast with an
-actionable error (timeout / refused TCP / `HTTP 407` etc.); the browser process
-is never started.
+credentials. The MCP issues a single absolute-form `GET http://api.ipapi.is/` to
+the proxy (with `Proxy-Authorization` when present) and only proceeds on a clean
+2xx with parseable JSON. There is **no fallback to the host's direct connection** —
+that would silently leak the real IP into login flows and cross-contaminate any
+persistent profile. A bad proxy fails fast with an actionable error.
 
-**Identity defaults aligned to the proxy egress.** The same probe doubles as
-the egress lookup: when a proxy is set, the session defaults its identity —
-**timezone, locale, languages, Accept-Language, and geolocation** — to the
-proxy's egress IP so the two never disagree. Anything explicitly set in
-`fingerprint={...}` or in the profile's `launch_overrides` wins over the
-proxy-derived default, so profiles can pin a stable identity (e.g. a fixed
-language) and still use rotating proxies. SOCKS proxies get a TCP-only
-liveness check, with timezone alignment falling back to the in-browser
-ipapi.is lookup (no auto-derived language for SOCKS). The detected egress
-(`ip`, `timezone`, `city`, `country`, `country_code`) is recorded in the
-session metadata under `proxy_exit`.
+**Identity defaults aligned to the proxy egress.** The same probe doubles as the
+egress lookup: when a proxy is set, the session defaults its identity —
+**timezone, locale, languages, Accept-Language, and geolocation** — to the proxy's
+egress IP so the two never disagree. Anything explicitly set in `fingerprint={...}`
+or in the profile's `launch_overrides` wins. SOCKS proxies get a TCP-only liveness
+check, with timezone alignment falling back to the in-browser ipapi.is lookup. The
+detected egress (`ip`, `timezone`, `city`, `country`, `country_code`) is recorded
+in session metadata under `proxy_exit`.
 
 ### Fingerprint / identity spoofing
 
 Pass a `fingerprint` object to `session_start` (or apply one to a live session
-with `session_set_fingerprint`) to control the identity the browser presents.
-All fields are optional; anything unset is left untouched:
+with `session_set_fingerprint`) to control the identity the browser presents. All
+fields are optional; anything unset is left untouched:
 
 - `timezone_id`, `locale`, `languages`, `accept_language`
 - `latitude`, `longitude`, `geo_accuracy`
@@ -228,22 +210,22 @@ All fields are optional; anything unset is left untouched:
 - `webgl_vendor`, `webgl_renderer`
 
 Overrides are applied at the **engine level via CDP `Emulation.*` wherever
-Chromium supports it**, so they propagate to Web Workers and HTTP request
-headers — not just the main document — keeping every signal internally
-consistent (a mismatched override is worse than none). The handful of properties
-with no CDP equivalent (`navigator.deviceMemory`, and the WebGL strings when
-requested) fall back to injected JS.
+Chromium supports it**, so they propagate to Web Workers and HTTP request headers —
+not just the main document — keeping every signal internally consistent (a
+mismatched override is worse than none). The handful of properties with no CDP
+equivalent (`navigator.deviceMemory`, and the WebGL strings when requested) fall
+back to injected JS.
 
-Two consistency rules matter: keep overrides **same-OS-family** (don't claim a
-Windows UA on a macOS host), and if you spoof geo/timezone, **back it with a
-matching proxy** so the egress IP agrees.
+Two rules matter: keep overrides **same-OS-family** (don't claim a Windows UA on a
+macOS host), and if you spoof geo/timezone, **back it with a matching proxy** so
+the egress IP agrees.
 
 ### WebRTC leak protection
 
 WebRTC can open a STUN connection that reveals the host's real local and public
 IPs directly, **bypassing the proxy entirely** (UDP isn't proxied) — the single
-biggest de-anonymization leak for a proxied browser. The `webrtc_leak_protection`
-option controls the guard:
+biggest de-anonymization leak for a proxied browser. The
+`webrtc_leak_protection` option controls the guard:
 
 | Mode | Behavior |
 | --- | --- |
@@ -266,156 +248,111 @@ python3 scripts/verify_mcp.py --proxy "http://user:pass@host:port"  # also check
 
 ### Cookies
 
-A managed `profile` stores its cookies in Chromium's native cookie store, so
-they persist automatically — there is nothing extra to manage. The only
-separate cookie operations are **injection** (`cookie_file` at launch, or
-`browser_cookies_set` at runtime) and **export** (`browser_cookies_get` /
-`browser_cookies_save`).
+A managed `profile` stores its cookies in Chromium's native cookie store, so they
+persist automatically — nothing extra to manage. The only separate cookie
+operations are **injection** (`cookie_file` at launch, or `browser_cookies_set` at
+runtime) and **export** (`browser_cookies_get` / `browser_cookies_save`).
 
 ## Centralized browser state store
 
-`mithwire-mcp` now keeps reusable browser state in one place:
+`mithwire-mcp` keeps reusable browser state in one place:
 
 - Default root: `~/.mithwire-mcp`
 - Override with env var: `MITHWIRE_MCP_HOME=/custom/path`
 - Override per server run: `mithwire-mcp --state-root /custom/path`
 
-Within that root:
-
-- `profiles/` stores persistent Chromium profile directories (user data dirs)
-- `configs/` stores launch configs used by `session_start`
-
-`session_start` supports optional `profile` and `launch_config` inputs.
-It resolves launch settings in this order:
+Within that root, `profiles/` stores persistent Chromium profile directories and
+`configs/` stores launch configs used by `session_start`. With optional `profile`
+and `launch_config` inputs, `session_start` resolves launch settings in order:
 
 1. Built-in defaults
 2. Saved default launch config (`configs/default.json`)
-3. Profile-linked launch config (if profile defines one)
+3. Profile-linked launch config (if the profile defines one)
 4. Selected `launch_config` (if provided)
 5. Profile `launch_overrides`
 6. Explicit `session_start` arguments
 
-This lets your AI client map account-oriented tasks to stable browser identities (profile + cookies + launch settings) without repeatedly passing raw paths.
+This lets your agent map account-oriented tasks to stable browser identities
+(profile + cookies + launch settings) without passing raw paths around.
 
-## Development setup
+## Tools exposed
 
-`mithwire-mcp` is developed inside the [`mithwire`](https://github.com/codeisalifestyle/mithwire) `uv` workspace, so the engine and the MCP can be edited together with no pin-bumping.
+<details>
+<summary><b>Session lifecycle</b></summary>
+
+`session_start`, `session_list`, `session_get`, `session_state_paths`,
+`session_profile_list`, `session_profile_get`, `session_profile_set`,
+`session_profile_delete`, `session_launch_config_list`, `session_launch_config_get`,
+`session_launch_config_set`, `session_launch_config_delete`,
+`session_set_fingerprint`, `session_rotate_proxy`, `session_set_policy`,
+`session_get_policy`, `session_set_download_dir`, `session_trace_start`,
+`session_trace_stop`, `session_trace_get`, `session_trace_export`,
+`session_trace_replay`, `session_stop`, `session_stop_all`
+</details>
+
+<details>
+<summary><b>Browser actions</b></summary>
+
+`browser_url`, `browser_navigate`, `browser_back`, `browser_forward`,
+`browser_reload`, `browser_tab_list`, `browser_tab_new`, `browser_tab_switch`,
+`browser_tab_close`, `browser_tab_current`, `browser_snapshot`, `browser_query`,
+`browser_click`, `browser_type`, `browser_handle_dialog`, `browser_set_file_input`,
+`browser_scroll`, `browser_wait`, `browser_wait_for_selector`,
+`browser_wait_for_url`, `browser_wait_for_text`, `browser_wait_for_function`,
+`browser_wait_for_network_idle`, `browser_html`, `browser_console_messages`,
+`browser_network_requests`, `browser_network_capture_start`,
+`browser_network_capture_get`, `browser_network_capture_stop`,
+`browser_network_capture_status`, `browser_downloads`, `browser_cookies_get`,
+`browser_cookies_set`, `browser_cookies_save`, `browser_cookies_clear`,
+`browser_storage_get`, `browser_storage_set`, `browser_storage_clear`,
+`browser_take_screenshot`, `browser_evaluate`, `browser_solve_cloudflare`
+</details>
+
+## Development
+
+`mithwire-mcp` is a standalone repo that depends on the published
+[`mithwire`](https://github.com/codeisalifestyle/mithwire) engine. It uses
+[`uv`](https://docs.astral.sh/uv/):
 
 ```bash
-git clone https://github.com/codeisalifestyle/mithwire.git
-cd mithwire
-uv sync                            # creates .venv at repo root, installs both packages editable
-uv run pytest packages/mithwire-mcp/tests -q
+git clone https://github.com/codeisalifestyle/mithwire-mcp.git
+cd mithwire-mcp
+uv sync                       # creates .venv and installs the package + dev deps
+uv run pytest -q
 uv run mithwire-mcp --transport stdio
 ```
 
-Client config for this mode:
+Point your client at the dev binary with an absolute path:
 
 ```json
 {
   "mcpServers": {
     "mithwire-mcp": {
-      "command": "/absolute/path/to/mithwire-mcp",
+      "command": "/absolute/path/to/mithwire-mcp/.venv/bin/mithwire-mcp",
       "args": ["--transport", "stdio"]
     }
   }
 }
 ```
 
-## Core tools exposed
+To hack on the engine and the MCP together, install the engine editable into this
+venv: `uv pip install -e /path/to/mithwire`.
 
-### Session lifecycle
-
-- `session_start`
-- `session_list`
-- `session_get`
-- `session_state_paths`
-- `session_profile_list`
-- `session_profile_get`
-- `session_profile_set`
-- `session_profile_delete`
-- `session_launch_config_list`
-- `session_launch_config_get`
-- `session_launch_config_set`
-- `session_launch_config_delete`
-- `session_set_fingerprint`
-- `session_rotate_proxy`
-- `session_set_policy`
-- `session_get_policy`
-- `session_set_download_dir`
-- `session_trace_start`
-- `session_trace_stop`
-- `session_trace_get`
-- `session_trace_export`
-- `session_trace_replay`
-- `session_stop`
-- `session_stop_all`
-
-### Browser actions
-
-- `browser_url`
-- `browser_navigate`
-- `browser_back`
-- `browser_forward`
-- `browser_reload`
-- `browser_tab_list`
-- `browser_tab_new`
-- `browser_tab_switch`
-- `browser_tab_close`
-- `browser_tab_current`
-- `browser_snapshot`
-- `browser_query`
-- `browser_click`
-- `browser_type`
-- `browser_handle_dialog`
-- `browser_set_file_input`
-- `browser_scroll`
-- `browser_wait`
-- `browser_wait_for_selector`
-- `browser_wait_for_url`
-- `browser_wait_for_text`
-- `browser_wait_for_function`
-- `browser_wait_for_network_idle`
-- `browser_html`
-- `browser_console_messages`
-- `browser_network_requests`
-- `browser_network_capture_start`
-- `browser_network_capture_get`
-- `browser_network_capture_stop`
-- `browser_network_capture_status`
-- `browser_downloads`
-- `browser_cookies_get`
-- `browser_cookies_set`
-- `browser_cookies_save`
-- `browser_cookies_clear`
-- `browser_storage_get`
-- `browser_storage_set`
-- `browser_storage_clear`
-- `browser_take_screenshot`
-- `browser_evaluate`
-- `browser_solve_cloudflare`
-
-## Project docs
-
-- Architecture: `docs/architecture.md`
+Architecture notes live in [`docs/architecture.md`](docs/architecture.md).
 
 ## Troubleshooting
 
-- **"command not found: mithwire-mcp"**
-  - Run `pipx ensurepath`, restart terminal and AI client, then retry.
-  - Use absolute command path from `which mithwire-mcp`.
-- **Python version mismatch**
-  - Use a supported Python (`>=3.10`) and reinstall/upgrade the package in your MCP environment.
-- **Browser fails to launch in restricted environments**
-  - Try `session_start` with `sandbox=false`.
-- **MCP client does not show tools**
-  - Confirm JSON syntax is valid.
-  - Confirm transport is `stdio`.
-  - Fully restart the AI client after editing MCP config.
+- **`command not found: mithwire-mcp`** — run `pipx ensurepath`, restart your terminal and client, then retry; or use the absolute path from `which mithwire-mcp`.
+- **Python version mismatch** — use Python `>=3.10` and reinstall/upgrade the package in your MCP environment.
+- **Browser fails to launch in restricted environments** — try `session_start` with `sandbox=false`.
+- **Client shows no tools** — confirm the JSON is valid, transport is `stdio`, and fully restart the client after editing the config.
 
 ## Safety notes
 
-- Use this only on sites and accounts where you are authorized.
+- Use this only on sites and accounts you're authorized to access.
 - Respect website Terms of Service and local regulations.
 - Be cautious with high-frequency automation.
 
+## License
+
+MIT — see [`LICENSE`](LICENSE). Built on [`mithwire`](https://github.com/codeisalifestyle/mithwire) (AGPL-3.0).
