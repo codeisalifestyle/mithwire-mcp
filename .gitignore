@@ -24,7 +24,18 @@ screenshots/
 !.env.example
 .idea/
 .vscode/
-.cursor/
+
+# Cursor workspace folder is mostly local-only operator state, but we DO
+# track the project's dev-flow skill (SKILL.md + scripts) so anyone
+# checking out the repo gets the same dev tooling. Anything else under
+# .cursor/ stays ignored by default — including the worktree's own
+# mcp.json, which carries machine-specific paths and may carry secrets in
+# env vars.
+.cursor/*
+!.cursor/skills/
+.cursor/skills/*
+!.cursor/skills/mithwire-mcp-dev-flow/
+
 *.log
 /results
 uv.lock
