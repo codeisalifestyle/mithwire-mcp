@@ -264,19 +264,74 @@ runtime) and **export** (`browser_cookies_get` / `browser_cookies_save`).
 - 🌱 Override with env var: `MITHWIRE_MCP_HOME=/custom/path`
 - 🏃 Override per server run: `mithwire-mcp --state-root /custom/path`
 
-Within that root, `profiles/` stores persistent Chromium profile directories and
-`configs/` stores launch configs used by `session_start`. With optional `profile`
-and `launch_config` inputs, `session_start` resolves launch settings in order:
+Layout under that root:
+
+```
+~/.mithwire-mcp/
+├── profiles/<name>/        # Chromium user-data dir + profile.json metadata
+├── presets/<name>.json     # opt-in shared launch recipes (e.g. mac-us)
+├── proxies/<name>.json     # first-class proxy registry (creds + rotation_url)
+└── cookies/                # one-shot cookie injection / export files
+```
+
+`session_start` resolves launch settings in **four** layers, lowest precedence first:
 
 1. Built-in defaults
-2. Saved default launch config (`configs/default.json`)
-3. Profile-linked launch config (if the profile defines one)
-4. Selected `launch_config` (if provided)
-5. Profile `launch_overrides`
-6. Explicit `session_start` arguments
+2. Effective preset values (the session's `preset` arg if given, else the
+   profile's `preset` field — never both at once)
+3. The profile's `launch_options` (per-profile overrides)
+4. Explicit `session_start` arguments
 
-This lets your agent map account-oriented tasks to stable browser identities
-(profile + cookies + launch settings) without passing raw paths around.
+After merging, `proxy_ref` (if set anywhere in the chain) is expanded against
+the proxy registry — unless a literal `proxy` was supplied at the same or
+higher layer, in which case the literal wins.
+
+### 🛰️ Proxy registry
+
+Several profiles can share one proxy (most common for residential / rotating
+endpoints). Store credentials once, reference them by name:
+
+```jsonc
+// proxies/oxy-us.json (written by session_proxy_set)
+{
+  "name": "oxy-us",
+  "scheme": "http",
+  "host": "us-pr.oxylabs.io",
+  "port": 7777,
+  "username": "...",
+  "password": "...",
+  "rotation_url": "https://api.example.com/rotate?token=...",
+  "tags": ["residential", "us"]
+}
+```
+
+```jsonc
+// profiles/alice/profile.json
+{
+  "description": "Alice",
+  "account_aliases": ["alice@example.com"],
+  "preset": "mac-us",
+  "launch_options": {
+    "proxy_ref": "oxy-us",
+    "fingerprint": { "timezone_id": "America/New_York" }
+  }
+}
+```
+
+The pre-launch proxy preflight (reachability + credentials probe) still runs
+on the resolved proxy; a failed probe **refuses the session**, regardless of
+whether the proxy came in as a literal or via `proxy_ref`. No half-launched
+browser, no silent fallback to the host's direct connection.
+
+### 🔄 Migration from older layouts
+
+On startup the state store transparently fixes up the previous schema:
+
+- `~/.mithwire-mcp/configs/` → `~/.mithwire-mcp/presets/` (file moves, no
+  silent merge if the destination already exists).
+- `profile.json`: the old `launch_config` and `launch_overrides` keys are
+  rewritten to `preset` and `launch_options` respectively, in place. Atomic
+  and idempotent — safe to re-run on every server start.
 
 ## 🧰 Tools exposed
 
@@ -285,8 +340,9 @@ This lets your agent map account-oriented tasks to stable browser identities
 
 `session_start`, `session_list`, `session_get`, `session_state_paths`,
 `session_profile_list`, `session_profile_get`, `session_profile_set`,
-`session_profile_delete`, `session_launch_config_list`, `session_launch_config_get`,
-`session_launch_config_set`, `session_launch_config_delete`,
+`session_profile_delete`, `session_preset_list`, `session_preset_get`,
+`session_preset_set`, `session_preset_delete`, `session_proxy_list`,
+`session_proxy_get`, `session_proxy_set`, `session_proxy_delete`,
 `session_set_fingerprint`, `session_rotate_proxy`, `session_set_policy`,
 `session_get_policy`, `session_set_download_dir`, `session_trace_start`,
 `session_trace_stop`, `session_trace_get`, `session_trace_export`,

@@ -29,10 +29,8 @@ from .proxy_health import (
     trigger_rotation,
 )
 from .state_store import (
-    DEFAULT_LAUNCH_CONFIG_NAME,
     BrowserStateStore,
     effective_launch_options,
-    merge_launch_options,
     normalize_launch_options,
     secure_write_text,
     validate_name,
@@ -359,15 +357,15 @@ class BrowserSessionManager:
         profile: str,
         description: str | None = None,
         account_aliases: list[str] | None = None,
-        launch_config: str | None = None,
-        launch_overrides: dict[str, Any] | None = None,
+        preset: str | None = None,
+        launch_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._state_store.set_profile(
             profile_name=profile,
             description=description,
             account_aliases=account_aliases,
-            launch_config=launch_config,
-            launch_overrides=launch_overrides,
+            preset=preset,
+            launch_options=launch_options,
         )
 
     async def delete_profile(
@@ -381,31 +379,57 @@ class BrowserSessionManager:
             delete_user_data_dir=delete_user_data_dir,
         )
 
-    async def list_launch_configs(self) -> dict[str, Any]:
-        configs = self._state_store.list_launch_configs()
+    async def list_presets(self) -> dict[str, Any]:
+        presets = self._state_store.list_presets()
         return {
-            "count": len(configs),
-            "configs": configs,
+            "count": len(presets),
+            "presets": presets,
         }
 
-    async def get_launch_config(self, *, config_name: str = DEFAULT_LAUNCH_CONFIG_NAME) -> dict[str, Any]:
-        return self._state_store.get_launch_config(config_name)
+    async def get_preset(self, *, preset_name: str) -> dict[str, Any]:
+        return self._state_store.get_preset(preset_name)
 
-    async def set_launch_config(
+    async def set_preset(
         self,
         *,
-        config_name: str = DEFAULT_LAUNCH_CONFIG_NAME,
+        preset_name: str,
         values: dict[str, Any] | None = None,
         merge: bool = True,
     ) -> dict[str, Any]:
-        return self._state_store.set_launch_config(
-            config_name=config_name,
+        return self._state_store.set_preset(
+            preset_name=preset_name,
             values=values,
             merge=merge,
         )
 
-    async def delete_launch_config(self, *, config_name: str) -> dict[str, Any]:
-        return self._state_store.delete_launch_config(config_name)
+    async def delete_preset(self, *, preset_name: str) -> dict[str, Any]:
+        return self._state_store.delete_preset(preset_name)
+
+    async def list_proxies(self) -> dict[str, Any]:
+        proxies = self._state_store.list_proxies()
+        return {
+            "count": len(proxies),
+            "proxies": proxies,
+        }
+
+    async def get_proxy(self, *, proxy_name: str) -> dict[str, Any]:
+        return self._state_store.get_proxy(proxy_name)
+
+    async def set_proxy(
+        self,
+        *,
+        proxy_name: str,
+        values: dict[str, Any] | None = None,
+        merge: bool = True,
+    ) -> dict[str, Any]:
+        return self._state_store.set_proxy(
+            proxy_name=proxy_name,
+            values=values,
+            merge=merge,
+        )
+
+    async def delete_proxy(self, *, proxy_name: str) -> dict[str, Any]:
+        return self._state_store.delete_proxy(proxy_name)
 
     async def set_policy(
         self,
@@ -941,11 +965,27 @@ class BrowserSessionManager:
         cookie_file: str | None,
         cookie_fallback_domain: str | None,
         profile: str | None,
-        launch_config: str | None,
+        preset: str | None,
         proxy: str | dict[str, Any] | None = None,
+        proxy_ref: str | None = None,
         fingerprint: dict[str, Any] | None = None,
         webrtc_leak_protection: str | None = None,
     ) -> dict[str, Any]:
+        """Compute the launch options for a session using the 4-layer chain.
+
+        Layers, lowest precedence first:
+
+        1. Built-in defaults (``BUILTIN_LAUNCH_DEFAULTS``).
+        2. Effective preset values. The session-supplied ``preset`` arg wins
+           over the profile's ``preset`` field — they are never combined; one
+           or the other is the active recipe.
+        3. The profile's top-level ``launch_options``.
+        4. Explicit ``session_start`` arguments.
+
+        After merging, ``proxy_ref`` is expanded against the proxy registry
+        (only when ``proxy`` itself is not set — a literal proxy spec wins
+        over a registry reference at the same layer).
+        """
         explicit = normalize_launch_options(
             {
                 key: value
@@ -957,8 +997,8 @@ class BrowserSessionManager:
                     "sandbox": sandbox,
                     "cookie_file": cookie_file,
                     "cookie_fallback_domain": cookie_fallback_domain,
-                    "profile": profile,
                     "proxy": proxy,
+                    "proxy_ref": proxy_ref,
                     "fingerprint": fingerprint,
                     "webrtc_leak_protection": webrtc_leak_protection,
                 }.items()
@@ -966,49 +1006,47 @@ class BrowserSessionManager:
             }
         )
 
-        default_config = self._state_store.get_launch_config(DEFAULT_LAUNCH_CONFIG_NAME)
-        default_values = default_config.get("values", {})
-
-        selected_launch_config_name: str | None = None
-        selected_launch_config_values: dict[str, Any] = {}
-        if launch_config:
-            selected_launch_config_name = validate_name(launch_config, label="launch config name")
-            selected_launch_config_values = self._state_store.get_launch_config(
-                selected_launch_config_name
-            ).get("values", {})
-
-        initial_values = merge_launch_options(default_values, selected_launch_config_values, explicit)
+        # Resolve the profile first so we know its ``preset`` (if any) and its
+        # ``launch_options`` (the per-profile override layer).
         profile_reference = (
             str(profile).strip()
             if isinstance(profile, str) and profile.strip()
-            else initial_values.get("profile")
+            else None
         )
         resolved_profile_name, profile_payload = self._resolve_profile_for_launch(profile_reference)
 
-        profile_launch_config_name: str | None = None
-        profile_launch_config_values: dict[str, Any] = {}
-        profile_launch_overrides: dict[str, Any] = {}
+        profile_launch_options: dict[str, Any] = {}
+        profile_preset_name: str | None = None
         if profile_payload:
-            profile_launch_config_name = profile_payload.get("launch_config")
-            if profile_launch_config_name and not selected_launch_config_name:
-                profile_launch_config_values = self._state_store.get_launch_config(
-                    profile_launch_config_name
-                ).get("values", {})
-            profile_launch_overrides = normalize_launch_options(
-                profile_payload.get("launch_overrides")
+            profile_launch_options = normalize_launch_options(
+                profile_payload.get("launch_options")
             )
-            profile_launch_overrides["profile"] = resolved_profile_name
+            preset_raw = profile_payload.get("preset")
+            if isinstance(preset_raw, str) and preset_raw.strip():
+                profile_preset_name = preset_raw.strip()
+
+        # Session-supplied preset wins over the profile's own preset. Either
+        # is opt-in; with neither, the chain collapses to defaults + profile +
+        # explicit, which is the throwaway-browser case.
+        session_preset_name: str | None = None
+        if preset:
+            session_preset_name = validate_name(preset, label="preset name")
+        effective_preset_name = session_preset_name or profile_preset_name
+
+        preset_values: dict[str, Any] = {}
+        if effective_preset_name:
+            preset_payload = self._state_store.get_preset(effective_preset_name)
+            preset_values = preset_payload.get("values", {})
 
         resolved_values = effective_launch_options(
-            default_values,
-            profile_launch_config_values,
-            selected_launch_config_values,
-            profile_launch_overrides,
+            preset_values,
+            profile_launch_options,
             explicit,
         )
-        if resolved_profile_name:
-            resolved_values["profile"] = resolved_profile_name
 
+        # Profile name is metadata, not a launch option, but downstream code
+        # reads it from ``state_paths`` / ``launch_context``.
+        # ``user_data_dir`` derives from the profile when none was set.
         resolved_user_data_dir = resolved_values.get("user_data_dir")
         if resolved_profile_name and not resolved_user_data_dir:
             resolved_user_data_dir = str(
@@ -1020,6 +1058,23 @@ class BrowserSessionManager:
                 Path(resolved_user_data_dir).expanduser().resolve()
             )
 
+        # PROXY REFERENCE EXPANSION
+        # ``proxy_ref`` lets profiles/presets point at a named entry in the
+        # proxy registry (one source of truth for credentials, N profiles
+        # share one entry). A literal ``proxy`` at any layer wins over a
+        # ref — that matches the user's mental model of "this profile uses
+        # proxy X by default, but for this session I want proxy Y instead."
+        proxy_ref_name = resolved_values.pop("proxy_ref", None)
+        if not resolved_values.get("proxy") and isinstance(proxy_ref_name, str) and proxy_ref_name.strip():
+            ref_normalized = validate_name(proxy_ref_name, label="proxy name")
+            proxy_payload = self._state_store.get_proxy(ref_normalized)
+            if not proxy_payload.get("exists"):
+                raise ValueError(
+                    f"proxy_ref '{ref_normalized}' is not defined in the proxy registry. "
+                    "Create it with session_proxy_set or remove the reference."
+                )
+            resolved_values["proxy"] = proxy_payload.get("values") or None
+
         resolved_cookie_file: str | None = None
         cookie_file_from_values = resolved_values.get("cookie_file")
         if isinstance(cookie_file_from_values, str) and cookie_file_from_values.strip():
@@ -1029,12 +1084,13 @@ class BrowserSessionManager:
         return {
             "values": resolved_values,
             "state_paths": self._state_store.paths_summary(),
-            "default_launch_config": default_config,
-            "selected_launch_config_name": selected_launch_config_name,
-            "selected_launch_config_values": selected_launch_config_values,
-            "profile_launch_config_name": profile_launch_config_name,
+            "session_preset_name": session_preset_name,
+            "profile_preset_name": profile_preset_name,
+            "effective_preset_name": effective_preset_name,
+            "preset_values": preset_values,
             "profile": profile_payload,
             "profile_name": resolved_profile_name,
+            "proxy_ref": proxy_ref_name if isinstance(proxy_ref_name, str) and proxy_ref_name.strip() else None,
         }
 
     async def start_session(
@@ -1049,8 +1105,9 @@ class BrowserSessionManager:
         cookie_file: str | None,
         cookie_fallback_domain: str | None,
         profile: str | None,
-        launch_config: str | None,
+        preset: str | None,
         proxy: str | dict[str, Any] | None = None,
+        proxy_ref: str | None = None,
         fingerprint: dict[str, Any] | None = None,
         webrtc_leak_protection: str | None = None,
     ) -> dict[str, Any]:
@@ -1064,8 +1121,9 @@ class BrowserSessionManager:
             cookie_file=cookie_file,
             cookie_fallback_domain=cookie_fallback_domain,
             profile=profile,
-            launch_config=launch_config,
+            preset=preset,
             proxy=proxy,
+            proxy_ref=proxy_ref,
             fingerprint=fingerprint,
             webrtc_leak_protection=webrtc_leak_protection,
         )
@@ -1173,8 +1231,10 @@ class BrowserSessionManager:
                     "state_paths": launch_context["state_paths"],
                     "profile": launch_context["profile_name"],
                     "profile_reference": profile,
-                    "launch_config": launch_context["selected_launch_config_name"],
-                    "profile_launch_config": launch_context["profile_launch_config_name"],
+                    "preset": launch_context["effective_preset_name"],
+                    "session_preset": launch_context["session_preset_name"],
+                    "profile_preset": launch_context["profile_preset_name"],
+                    "proxy_ref": launch_context["proxy_ref"],
                     "cookie_file": str(Path(resolved_cookie_file).expanduser())
                     if resolved_cookie_file
                     else None,

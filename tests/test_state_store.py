@@ -14,11 +14,11 @@ from mithwire_mcp.state_store import (
 
 
 class StateStoreTest(unittest.TestCase):
-    def test_launch_config_round_trip(self) -> None:
+    def test_preset_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = BrowserStateStore(state_root=tmpdir)
-            saved = store.set_launch_config(
-                config_name="default",
+            saved = store.set_preset(
+                preset_name="mac-us",
                 values={
                     "headless": True,
                     "start_url": "https://example.com",
@@ -30,18 +30,18 @@ class StateStoreTest(unittest.TestCase):
             self.assertEqual(saved["values"]["start_url"], "https://example.com")
             self.assertEqual(saved["values"]["browser_args"], ["--lang=en-US"])
 
-            fetched = store.get_launch_config("default")
+            fetched = store.get_preset("mac-us")
             self.assertEqual(fetched["values"], saved["values"])
             self.assertEqual(fetched["effective_values"]["start_url"], "https://example.com")
 
-    def test_launch_config_round_trips_dict_proxy_with_rotation_url(self) -> None:
+    def test_preset_round_trips_dict_proxy_with_rotation_url(self) -> None:
         # The proxy launch option used to be string-only. It now accepts a
         # dict so optional fields like ``rotation_url`` can ride along, and
         # both shapes must survive a save->read round-trip unchanged.
         with tempfile.TemporaryDirectory() as tmpdir:
             store = BrowserStateStore(state_root=tmpdir)
-            saved = store.set_launch_config(
-                config_name="rotating",
+            saved = store.set_preset(
+                preset_name="rotating",
                 values={
                     "proxy": {
                         "server": "http://1.2.3.4:8080",
@@ -57,25 +57,38 @@ class StateStoreTest(unittest.TestCase):
                 "https://api.provider.com/rotate?token=abc",
             )
 
-            fetched = store.get_launch_config("rotating")
+            fetched = store.get_preset("rotating")
             self.assertEqual(fetched["values"]["proxy"], saved["values"]["proxy"])
 
-    def test_launch_config_round_trips_string_proxy(self) -> None:
+    def test_preset_round_trips_string_proxy(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = BrowserStateStore(state_root=tmpdir)
-            saved = store.set_launch_config(
-                config_name="simple",
+            saved = store.set_preset(
+                preset_name="simple",
                 values={"proxy": "http://user:pw@1.2.3.4:8080"},
             )
             self.assertEqual(saved["values"]["proxy"], "http://user:pw@1.2.3.4:8080")
-            fetched = store.get_launch_config("simple")
+            fetched = store.get_preset("simple")
             self.assertEqual(fetched["values"]["proxy"], "http://user:pw@1.2.3.4:8080")
 
     def test_dict_proxy_rejects_non_string_non_dict(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = BrowserStateStore(state_root=tmpdir)
             with self.assertRaises(ValueError):
-                store.set_launch_config(config_name="bad", values={"proxy": 42})
+                store.set_preset(preset_name="bad", values={"proxy": 42})
+
+    def test_proxy_ref_round_trip(self) -> None:
+        # New: presets and profile launch_options can carry a proxy_ref that
+        # points at a registry entry. The persisted value is just a string.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = BrowserStateStore(state_root=tmpdir)
+            saved = store.set_preset(
+                preset_name="ref-bearing",
+                values={"proxy_ref": "oxylabs-us"},
+            )
+            self.assertEqual(saved["values"]["proxy_ref"], "oxylabs-us")
+            fetched = store.get_preset("ref-bearing")
+            self.assertEqual(fetched["values"]["proxy_ref"], "oxylabs-us")
 
     def test_profile_alias_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -87,6 +100,26 @@ class StateStoreTest(unittest.TestCase):
             by_alias = store.resolve_profile_reference("@acme_social")
             self.assertEqual(by_alias["name"], "twitter_main")
             self.assertTrue(by_alias["profile_dir"].endswith("/profiles/twitter_main"))
+
+    def test_profile_carries_preset_and_launch_options(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = BrowserStateStore(state_root=tmpdir)
+            saved = store.set_profile(
+                profile_name="alice",
+                preset="mac-us",
+                launch_options={
+                    "headless": False,
+                    "fingerprint": {"timezone_id": "America/New_York"},
+                    "proxy_ref": "oxylabs-us",
+                },
+            )
+            self.assertEqual(saved["preset"], "mac-us")
+            self.assertEqual(saved["launch_options"]["proxy_ref"], "oxylabs-us")
+            self.assertFalse(saved["launch_options"]["headless"])
+            self.assertEqual(
+                saved["launch_options"]["fingerprint"]["timezone_id"],
+                "America/New_York",
+            )
 
 
 class StateStoreHardeningTest(unittest.TestCase):
@@ -112,18 +145,24 @@ class StateStoreHardeningTest(unittest.TestCase):
     def test_state_dirs_are_owner_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = BrowserStateStore(state_root=str(Path(tmpdir) / "root"))
-            for directory in (store.state_root, store.cookies_dir, store.configs_dir):
+            for directory in (
+                store.state_root,
+                store.cookies_dir,
+                store.presets_dir,
+                store.proxies_dir,
+                store.profiles_dir,
+            ):
                 mode = stat.S_IMODE(os.stat(directory).st_mode)
                 self.assertEqual(mode, 0o700)
 
-    def test_delete_launch_config(self) -> None:
+    def test_delete_preset(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = BrowserStateStore(state_root=tmpdir)
-            store.set_launch_config(config_name="scratch", values={"headless": True})
-            self.assertTrue(store.get_launch_config("scratch")["exists"])
-            result = store.delete_launch_config("scratch")
+            store.set_preset(preset_name="scratch", values={"headless": True})
+            self.assertTrue(store.get_preset("scratch")["exists"])
+            result = store.delete_preset("scratch")
             self.assertTrue(result["deleted"])
-            self.assertFalse(store.get_launch_config("scratch")["exists"])
+            self.assertFalse(store.get_preset("scratch")["exists"])
 
     def test_delete_profile_removes_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -153,20 +192,21 @@ class StateStoreHardeningTest(unittest.TestCase):
 
 
 class SessionLaunchResolutionTest(unittest.IsolatedAsyncioTestCase):
-    async def test_resolves_profile_and_defaults(self) -> None:
+    async def test_resolves_profile_with_preset_and_options(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = BrowserSessionManager(state_root=tmpdir)
-            await manager.set_launch_config(
-                config_name="default",
+            await manager.set_preset(
+                preset_name="mac-us",
                 values={
                     "headless": True,
-                    "profile": "social_media_main",
                     "start_url": "https://example.com/home",
+                    "fingerprint": {"timezone_id": "America/Los_Angeles"},
                 },
             )
             await manager.set_profile(
-                profile="social_media_main",
-                launch_overrides={"sandbox": False},
+                profile="alice",
+                preset="mac-us",
+                launch_options={"sandbox": False},
             )
             context = manager._resolve_launch_context(
                 headless=None,
@@ -176,21 +216,60 @@ class SessionLaunchResolutionTest(unittest.IsolatedAsyncioTestCase):
                 sandbox=None,
                 cookie_file=None,
                 cookie_fallback_domain=None,
-                profile=None,
-                launch_config=None,
+                profile="alice",
+                preset=None,
             )
             values = context["values"]
+            # Preset gave us headless + start_url + fingerprint.
             self.assertTrue(values["headless"])
+            self.assertEqual(values["start_url"], "https://example.com/home")
+            self.assertEqual(
+                values["fingerprint"]["timezone_id"], "America/Los_Angeles"
+            )
+            # Profile launch_options overrode sandbox.
             self.assertFalse(values["sandbox"])
-            self.assertEqual(values["profile"], "social_media_main")
             # A managed profile resolves to a persistent, profile-scoped data dir.
-            self.assertTrue(values["user_data_dir"].endswith("/profiles/social_media_main"))
+            self.assertTrue(values["user_data_dir"].endswith("/profiles/alice"))
+            self.assertEqual(context["effective_preset_name"], "mac-us")
+            self.assertEqual(context["profile_preset_name"], "mac-us")
+            self.assertIsNone(context["session_preset_name"])
 
-    async def test_explicit_values_override_saved_config(self) -> None:
+    async def test_session_preset_overrides_profile_preset(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = BrowserSessionManager(state_root=tmpdir)
-            await manager.set_launch_config(
-                config_name="default",
+            await manager.set_preset(
+                preset_name="mac-us",
+                values={"start_url": "https://us.example.com"},
+            )
+            await manager.set_preset(
+                preset_name="mac-de",
+                values={"start_url": "https://de.example.com"},
+            )
+            await manager.set_profile(
+                profile="bob",
+                preset="mac-us",
+            )
+            context = manager._resolve_launch_context(
+                headless=None,
+                start_url=None,
+                browser_args=None,
+                browser_executable_path=None,
+                sandbox=None,
+                cookie_file=None,
+                cookie_fallback_domain=None,
+                profile="bob",
+                preset="mac-de",
+            )
+            self.assertEqual(context["values"]["start_url"], "https://de.example.com")
+            self.assertEqual(context["effective_preset_name"], "mac-de")
+            self.assertEqual(context["session_preset_name"], "mac-de")
+            self.assertEqual(context["profile_preset_name"], "mac-us")
+
+    async def test_explicit_args_override_preset_and_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = BrowserSessionManager(state_root=tmpdir)
+            await manager.set_preset(
+                preset_name="default",
                 values={
                     "headless": True,
                     "sandbox": False,
@@ -205,13 +284,106 @@ class SessionLaunchResolutionTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile=None,
-                launch_config=None,
+                preset="default",
             )
             values = context["values"]
             self.assertFalse(values["headless"])
             self.assertTrue(values["sandbox"])
             self.assertEqual(values["start_url"], "https://custom.example")
             self.assertEqual(values["browser_args"], ["--window-size=1280,720"])
+
+    async def test_proxy_ref_expands_via_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = BrowserSessionManager(state_root=tmpdir)
+            await manager.set_proxy(
+                proxy_name="oxy-us",
+                values={
+                    "scheme": "http",
+                    "host": "us-pr.oxylabs.io",
+                    "port": 7777,
+                    "username": "u",
+                    "password": "p",
+                    "rotation_url": "https://api.example.com/rotate?token=abc",
+                },
+            )
+            await manager.set_profile(
+                profile="alice",
+                launch_options={"proxy_ref": "oxy-us"},
+            )
+            context = manager._resolve_launch_context(
+                headless=None,
+                start_url=None,
+                browser_args=None,
+                browser_executable_path=None,
+                sandbox=None,
+                cookie_file=None,
+                cookie_fallback_domain=None,
+                profile="alice",
+                preset=None,
+            )
+            values = context["values"]
+            # proxy_ref must have been expanded into a literal proxy dict and
+            # then dropped from the resolved values.
+            self.assertNotIn("proxy_ref", values)
+            self.assertIsInstance(values["proxy"], dict)
+            self.assertEqual(values["proxy"]["host"], "us-pr.oxylabs.io")
+            self.assertEqual(values["proxy"]["port"], 7777)
+            self.assertEqual(
+                values["proxy"]["rotation_url"],
+                "https://api.example.com/rotate?token=abc",
+            )
+
+    async def test_explicit_proxy_wins_over_proxy_ref(self) -> None:
+        # If the profile has proxy_ref but the caller passes a literal proxy,
+        # the literal wins (use case: "I usually run alice through oxy-us;
+        # this session, route via my local debug proxy").
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = BrowserSessionManager(state_root=tmpdir)
+            await manager.set_proxy(
+                proxy_name="oxy-us",
+                values={"scheme": "http", "host": "us.example.com", "port": 7777},
+            )
+            await manager.set_profile(
+                profile="alice",
+                launch_options={"proxy_ref": "oxy-us"},
+            )
+            context = manager._resolve_launch_context(
+                headless=None,
+                start_url=None,
+                browser_args=None,
+                browser_executable_path=None,
+                sandbox=None,
+                cookie_file=None,
+                cookie_fallback_domain=None,
+                profile="alice",
+                preset=None,
+                proxy="http://debug:8888",
+            )
+            values = context["values"]
+            self.assertEqual(values["proxy"], "http://debug:8888")
+            self.assertNotIn("proxy_ref", values)
+
+    async def test_proxy_ref_to_missing_entry_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manager = BrowserSessionManager(state_root=tmpdir)
+            await manager.set_profile(
+                profile="alice",
+                launch_options={"proxy_ref": "nonexistent"},
+            )
+            with self.assertRaises(ValueError) as ctx:
+                manager._resolve_launch_context(
+                    headless=None,
+                    start_url=None,
+                    browser_args=None,
+                    browser_executable_path=None,
+                    sandbox=None,
+                    cookie_file=None,
+                    cookie_fallback_domain=None,
+                    profile="alice",
+                    preset=None,
+                )
+            self.assertIn("proxy_ref", str(ctx.exception))
+            self.assertIn("nonexistent", str(ctx.exception))
 
 
 if __name__ == "__main__":

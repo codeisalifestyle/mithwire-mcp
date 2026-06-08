@@ -19,7 +19,7 @@ from mithwire_mcp.runtime import BrowserSessionManager
 
 
 class DashboardRouteTest(unittest.TestCase):
-    """In-process tests for /api/health, /api/system, /api/profiles, /api/configs."""
+    """In-process tests for /api/health, /api/system, /api/profiles, /api/presets, /api/proxies."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -185,19 +185,19 @@ class DashboardRouteTest(unittest.TestCase):
             404,
         )
 
-    # -- launch configs CRUD ----------------------------------------------
+    # -- presets CRUD ------------------------------------------------------
 
-    def test_configs_crud_roundtrip(self) -> None:
+    def test_presets_crud_roundtrip(self) -> None:
         client = self._client()
         headers = {"X-Dashboard-Token": self.token}
 
         # Empty list on a fresh state root.
-        listed = client.get("/api/configs", headers=headers).json()
+        listed = client.get("/api/presets", headers=headers).json()
         self.assertEqual(listed["count"], 0)
 
         # Set values (merge mode).
         up = client.post(
-            "/api/configs/stealth",
+            "/api/presets/stealth",
             json={"values": {"headless": True}, "merge": True},
             headers=headers,
         )
@@ -205,12 +205,58 @@ class DashboardRouteTest(unittest.TestCase):
         self.assertTrue(up.json()["values"].get("headless"))
 
         # Get back.
-        got = client.get("/api/configs/stealth", headers=headers).json()
+        got = client.get("/api/presets/stealth", headers=headers).json()
         self.assertTrue(got["values"].get("headless"))
 
         # Delete.
-        deleted = client.delete("/api/configs/stealth", headers=headers)
+        deleted = client.delete("/api/presets/stealth", headers=headers)
         self.assertEqual(deleted.status_code, 200)
+
+    # -- proxies CRUD ------------------------------------------------------
+
+    def test_proxies_crud_roundtrip(self) -> None:
+        client = self._client()
+        headers = {"X-Dashboard-Token": self.token}
+
+        listed = client.get("/api/proxies", headers=headers).json()
+        self.assertEqual(listed["count"], 0)
+
+        # Create using discrete fields.
+        up = client.post(
+            "/api/proxies/oxy-us",
+            json={
+                "values": {
+                    "scheme": "http",
+                    "host": "us-pr.oxylabs.io",
+                    "port": 7777,
+                    "username": "u",
+                    "password": "p",
+                    "rotation_url": "https://api.example.com/rotate",
+                }
+            },
+            headers=headers,
+        )
+        self.assertEqual(up.status_code, 200)
+        self.assertEqual(up.json()["values"]["host"], "us-pr.oxylabs.io")
+
+        # Bad input on a fresh name -> 400 (no existing entry to merge into).
+        bad = client.post(
+            "/api/proxies/missing-host",
+            json={"values": {"scheme": "http", "port": 7777}},
+            headers=headers,
+        )
+        self.assertEqual(bad.status_code, 400)
+
+        # List + get.
+        listed = client.get("/api/proxies", headers=headers).json()
+        self.assertEqual(listed["count"], 1)
+        got = client.get("/api/proxies/oxy-us", headers=headers).json()
+        self.assertTrue(got["exists"])
+
+        # Delete.
+        deleted = client.delete("/api/proxies/oxy-us", headers=headers)
+        self.assertEqual(deleted.status_code, 200)
+        self.assertTrue(deleted.json()["deleted"])
 
 
 class DashboardWebSocketTest(unittest.TestCase):

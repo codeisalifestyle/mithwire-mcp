@@ -121,8 +121,8 @@ async def profiles_create_or_update(request: Request) -> Response:
             profile=name.strip(),
             description=body.get("description"),
             account_aliases=body.get("account_aliases"),
-            launch_config=body.get("launch_config"),
-            launch_overrides=body.get("launch_overrides"),
+            preset=body.get("preset"),
+            launch_options=body.get("launch_options"),
         )
     except (ValueError, TypeError) as exc:
         return _err(str(exc), status=400)
@@ -156,25 +156,25 @@ async def profiles_delete(request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
-# Launch configs
+# Presets (shared launch recipes)
 # ---------------------------------------------------------------------------
 
 
-async def configs_list(request: Request) -> Response:
+async def presets_list(request: Request) -> Response:
     manager: BrowserSessionManager = _state(request)["manager"]
-    return _ok(await manager.list_launch_configs())
+    return _ok(await manager.list_presets())
 
 
-async def configs_get(request: Request) -> Response:
+async def presets_get(request: Request) -> Response:
     manager: BrowserSessionManager = _state(request)["manager"]
     name = request.path_params["name"]
     try:
-        return _ok(await manager.get_launch_config(config_name=name))
+        return _ok(await manager.get_preset(preset_name=name))
     except ValueError as exc:
         return _err(str(exc), status=400)
 
 
-async def configs_set(request: Request) -> Response:
+async def presets_set(request: Request) -> Response:
     manager: BrowserSessionManager = _state(request)["manager"]
     bus: DashboardEventBus = _state(request)["events"]
     name = request.path_params["name"]
@@ -185,26 +185,79 @@ async def configs_set(request: Request) -> Response:
     values = body.get("values") if isinstance(body.get("values"), dict) else body
     merge = bool(body.get("merge", True))
     try:
-        result = await manager.set_launch_config(
-            config_name=name,
+        result = await manager.set_preset(
+            preset_name=name,
             values=values,
             merge=merge,
         )
     except (ValueError, TypeError) as exc:
         return _err(str(exc), status=400)
-    await bus.publish("config.changed", {"config": name, "op": "upsert"})
+    await bus.publish("preset.changed", {"preset": name, "op": "upsert"})
     return _ok(result)
 
 
-async def configs_delete(request: Request) -> Response:
+async def presets_delete(request: Request) -> Response:
     manager: BrowserSessionManager = _state(request)["manager"]
     bus: DashboardEventBus = _state(request)["events"]
     name = request.path_params["name"]
     try:
-        result = await manager.delete_launch_config(config_name=name)
+        result = await manager.delete_preset(preset_name=name)
     except (ValueError, TypeError) as exc:
         return _err(str(exc), status=400)
-    await bus.publish("config.changed", {"config": name, "op": "delete"})
+    await bus.publish("preset.changed", {"preset": name, "op": "delete"})
+    return _ok(result)
+
+
+# ---------------------------------------------------------------------------
+# Proxies (first-class registry)
+# ---------------------------------------------------------------------------
+
+
+async def proxies_list(request: Request) -> Response:
+    manager: BrowserSessionManager = _state(request)["manager"]
+    return _ok(await manager.list_proxies())
+
+
+async def proxies_get(request: Request) -> Response:
+    manager: BrowserSessionManager = _state(request)["manager"]
+    name = request.path_params["name"]
+    try:
+        return _ok(await manager.get_proxy(proxy_name=name))
+    except ValueError as exc:
+        return _err(str(exc), status=400)
+
+
+async def proxies_set(request: Request) -> Response:
+    manager: BrowserSessionManager = _state(request)["manager"]
+    bus: DashboardEventBus = _state(request)["events"]
+    name = request.path_params["name"]
+    try:
+        body = await _read_json(request)
+    except ValueError as exc:
+        return _err(str(exc))
+    values = body.get("values") if isinstance(body.get("values"), dict) else body
+    merge = bool(body.get("merge", True))
+    try:
+        result = await manager.set_proxy(
+            proxy_name=name,
+            values=values,
+            merge=merge,
+        )
+    except (ValueError, TypeError) as exc:
+        return _err(str(exc), status=400)
+    await bus.publish("proxy.changed", {"proxy": name, "op": "upsert"})
+    return _ok(result)
+
+
+async def proxies_delete(request: Request) -> Response:
+    manager: BrowserSessionManager = _state(request)["manager"]
+    bus: DashboardEventBus = _state(request)["events"]
+    name = request.path_params["name"]
+    try:
+        result = await manager.delete_proxy(proxy_name=name)
+    except (ValueError, TypeError) as exc:
+        return _err(str(exc), status=400)
+    await bus.publish("proxy.changed", {"proxy": name, "op": "delete"})
     return _ok(result)
 
 
@@ -257,8 +310,9 @@ async def sessions_create(request: Request) -> Response:
             cookie_file=body.get("cookie_file"),
             cookie_fallback_domain=body.get("cookie_fallback_domain"),
             profile=body.get("profile"),
-            launch_config=body.get("launch_config"),
+            preset=body.get("preset"),
             proxy=body.get("proxy"),
+            proxy_ref=body.get("proxy_ref"),
             fingerprint=body.get("fingerprint"),
             webrtc_leak_protection=body.get("webrtc_leak_protection"),
         )
@@ -533,7 +587,8 @@ async def events_ws(websocket: WebSocket) -> None:
                         "session.navigated",
                         "session.error",
                         "profile.changed",
-                        "config.changed",
+                        "preset.changed",
+                        "proxy.changed",
                     ]
                 },
             }
@@ -594,11 +649,16 @@ def build_routes() -> list[Any]:
         Route("/api/profiles", profiles_create_or_update, methods=["POST"]),
         Route("/api/profiles/{name}", profiles_get, methods=["GET"]),
         Route("/api/profiles/{name}", profiles_delete, methods=["DELETE"]),
-        # Launch configs
-        Route("/api/configs", configs_list, methods=["GET"]),
-        Route("/api/configs/{name}", configs_get, methods=["GET"]),
-        Route("/api/configs/{name}", configs_set, methods=["POST", "PUT"]),
-        Route("/api/configs/{name}", configs_delete, methods=["DELETE"]),
+        # Presets (shared launch recipes)
+        Route("/api/presets", presets_list, methods=["GET"]),
+        Route("/api/presets/{name}", presets_get, methods=["GET"]),
+        Route("/api/presets/{name}", presets_set, methods=["POST", "PUT"]),
+        Route("/api/presets/{name}", presets_delete, methods=["DELETE"]),
+        # Proxies (registry)
+        Route("/api/proxies", proxies_list, methods=["GET"]),
+        Route("/api/proxies/{name}", proxies_get, methods=["GET"]),
+        Route("/api/proxies/{name}", proxies_set, methods=["POST", "PUT"]),
+        Route("/api/proxies/{name}", proxies_delete, methods=["DELETE"]),
         # Sessions: lifecycle
         Route("/api/sessions", sessions_list, methods=["GET"]),
         Route("/api/sessions", sessions_create, methods=["POST"]),

@@ -161,20 +161,24 @@ def create_server(
             "Launch a new, isolated browser. By default it is ephemeral (no saved "
             "state) and headful. Pass profile=<name> to launch a persistent managed "
             "profile whose cookies/storage survive across runs. Optional: headless, "
-            "proxy, start_url, cookie_file (one-shot cookie injection), launch_config. "
+            "proxy, proxy_ref, start_url, cookie_file (one-shot cookie injection), "
+            "preset (apply a saved launch recipe; overrides the profile's own preset "
+            "for this run only). "
             "proxy accepts 'http://host:port', 'http://user:pass@host:port', the "
             "provider 'scheme:host:port:user:pass' form, or socks5://host:port "
             "(authenticated SOCKS not wired yet; use the HTTP endpoint). "
             "It can ALSO be a dict {server, username?, password?, rotation_url?} "
             "where rotation_url is an optional provider endpoint that rotates "
-            "the upstream exit IP when hit (stored for later use; not invoked "
-            "automatically on launch). "
+            "the upstream exit IP when hit. "
+            "proxy_ref is the alternate form: a name pointing at an entry in the "
+            "proxy registry (see session_proxy_set). The two are mutually exclusive "
+            "per session — a literal proxy spec wins over a registry reference. "
             "When a proxy is set, the session is REFUSED if the proxy fails a "
             "pre-launch reachability + credentials probe (no half-launched browser, "
             "no fallback to the host's direct connection). On success, the browser "
             "identity defaults to the proxy egress (timezone, locale/languages, "
             "Accept-Language, geolocation) so the two never disagree; any field set "
-            "in fingerprint={...} or in the profile's launch_overrides wins over the "
+            "in fingerprint={...} or in the profile's launch_options wins over the "
             "proxy default. Pass fingerprint={...} to override any identity field "
             "explicitly (timezone_id, languages, latitude/longitude, user_agent, "
             "platform, hardware_concurrency, device_memory, screen, webgl_vendor/"
@@ -195,8 +199,9 @@ def create_server(
         cookie_file: str | None = None,
         cookie_fallback_domain: str | None = None,
         profile: str | None = None,
-        launch_config: str | None = None,
+        preset: str | None = None,
         proxy: str | dict[str, Any] | None = None,
+        proxy_ref: str | None = None,
         fingerprint: dict[str, Any] | None = None,
         webrtc_leak_protection: str | None = None,
     ) -> dict[str, Any]:
@@ -210,8 +215,9 @@ def create_server(
             cookie_file=cookie_file,
             cookie_fallback_domain=cookie_fallback_domain,
             profile=profile,
-            launch_config=launch_config,
+            preset=preset,
             proxy=proxy,
+            proxy_ref=proxy_ref,
             fingerprint=fingerprint,
             webrtc_leak_protection=webrtc_leak_protection,
         )
@@ -280,7 +286,7 @@ def create_server(
 
     @mcp.tool(
         name="session_state_paths",
-        description="Get centralized directories used for profiles, cookies, and configs.",
+        description="Get centralized directories used for profiles, presets, proxies, and cookies.",
     )
     async def session_state_paths() -> dict[str, Any]:
         return await manager.get_state_paths()
@@ -293,20 +299,31 @@ def create_server(
     async def session_profile_get(profile: str) -> dict[str, Any]:
         return await manager.get_profile(profile=profile)
 
-    @mcp.tool(name="session_profile_set", description="Create or update a saved profile.")
+    @mcp.tool(
+        name="session_profile_set",
+        description=(
+            "Create or update a saved profile. ``preset`` (optional) names a shared "
+            "launch recipe in the preset registry the profile inherits from. "
+            "``launch_options`` (optional) is a dict of per-profile overrides on top "
+            "of the preset, keyed by the same fields session_start accepts (headless, "
+            "start_url, browser_args, sandbox, fingerprint, proxy, proxy_ref, "
+            "cookie_file, cookie_fallback_domain, webrtc_leak_protection, "
+            "browser_executable_path, user_data_dir)."
+        ),
+    )
     async def session_profile_set(
         profile: str,
         description: str | None = None,
         account_aliases: list[str] | None = None,
-        launch_config: str | None = None,
-        launch_overrides: dict[str, Any] | None = None,
+        preset: str | None = None,
+        launch_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return await manager.set_profile(
             profile=profile,
             description=description,
             account_aliases=account_aliases,
-            launch_config=launch_config,
-            launch_overrides=launch_overrides,
+            preset=preset,
+            launch_options=launch_options,
         )
 
     @mcp.tool(name="session_profile_delete", description="Delete profile metadata or entire profile directory.")
@@ -319,32 +336,93 @@ def create_server(
             delete_user_data_dir=delete_user_data_dir,
         )
 
-    @mcp.tool(name="session_launch_config_list", description="List saved launch configs.")
-    async def session_launch_config_list() -> dict[str, Any]:
-        return await manager.list_launch_configs()
+    @mcp.tool(
+        name="session_preset_list",
+        description="List saved launch presets (shared recipes profiles can inherit).",
+    )
+    async def session_preset_list() -> dict[str, Any]:
+        return await manager.list_presets()
 
     @mcp.tool(
-        name="session_launch_config_get",
-        description="Get one launch config (default name is 'default').",
+        name="session_preset_get",
+        description="Get one preset by name.",
     )
-    async def session_launch_config_get(config_name: str = "default") -> dict[str, Any]:
-        return await manager.get_launch_config(config_name=config_name)
+    async def session_preset_get(preset_name: str) -> dict[str, Any]:
+        return await manager.get_preset(preset_name=preset_name)
 
-    @mcp.tool(name="session_launch_config_set", description="Create or update a launch config.")
-    async def session_launch_config_set(
-        config_name: str = "default",
+    @mcp.tool(
+        name="session_preset_set",
+        description=(
+            "Create or update a preset. ``values`` accepts the same fields "
+            "session_start does (headless, start_url, browser_args, sandbox, "
+            "fingerprint, proxy, proxy_ref, cookie_file, cookie_fallback_domain, "
+            "webrtc_leak_protection, browser_executable_path, user_data_dir). "
+            "Profiles point at a preset by setting ``preset: <name>`` in "
+            "session_profile_set; session_start can also pass preset=<name> to "
+            "override the profile's own preset for one run."
+        ),
+    )
+    async def session_preset_set(
+        preset_name: str,
         values: dict[str, Any] | None = None,
         merge: bool = True,
     ) -> dict[str, Any]:
-        return await manager.set_launch_config(
-            config_name=config_name,
+        return await manager.set_preset(
+            preset_name=preset_name,
             values=values,
             merge=merge,
         )
 
-    @mcp.tool(name="session_launch_config_delete", description="Delete a launch config by name.")
-    async def session_launch_config_delete(config_name: str) -> dict[str, Any]:
-        return await manager.delete_launch_config(config_name=config_name)
+    @mcp.tool(
+        name="session_preset_delete",
+        description="Delete a preset by name.",
+    )
+    async def session_preset_delete(preset_name: str) -> dict[str, Any]:
+        return await manager.delete_preset(preset_name=preset_name)
+
+    @mcp.tool(
+        name="session_proxy_list",
+        description="List saved proxy registry entries.",
+    )
+    async def session_proxy_list() -> dict[str, Any]:
+        return await manager.list_proxies()
+
+    @mcp.tool(
+        name="session_proxy_get",
+        description="Get one proxy registry entry by name.",
+    )
+    async def session_proxy_get(proxy_name: str) -> dict[str, Any]:
+        return await manager.get_proxy(proxy_name=proxy_name)
+
+    @mcp.tool(
+        name="session_proxy_set",
+        description=(
+            "Create or update a proxy registry entry. ``values`` accepts either "
+            "discrete fields ({scheme, host, port, username, password, "
+            "rotation_url, tags}) or a single ``server`` URL ({server: "
+            "'http://user:pw@host:port', rotation_url, tags}). The persisted "
+            "form is always discrete fields; ``server`` is decomposed at write. "
+            "Profiles, presets, and session_start reference the entry by name "
+            "via the ``proxy_ref`` field."
+        ),
+    )
+    async def session_proxy_set(
+        proxy_name: str,
+        values: dict[str, Any] | None = None,
+        merge: bool = True,
+    ) -> dict[str, Any]:
+        return await manager.set_proxy(
+            proxy_name=proxy_name,
+            values=values,
+            merge=merge,
+        )
+
+    @mcp.tool(
+        name="session_proxy_delete",
+        description="Delete a proxy registry entry by name.",
+    )
+    async def session_proxy_delete(proxy_name: str) -> dict[str, Any]:
+        return await manager.delete_proxy(proxy_name=proxy_name)
 
     @mcp.tool(name="session_set_policy", description="Set runtime policy for one session.")
     async def session_set_policy(
@@ -1368,7 +1446,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--state-root",
         default=None,
         help=(
-            "Optional root directory for centralized profiles/cookies/configs. "
+            "Optional root directory for centralized profiles/presets/proxies/cookies. "
             "Defaults to ~/.mithwire-mcp or $MITHWIRE_MCP_HOME."
         ),
     )
