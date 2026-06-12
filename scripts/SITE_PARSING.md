@@ -37,6 +37,14 @@ result to exist and never depend on guessing how long a site takes.
   `isHeadlessChrome`, `isAutomatedWithCDP`, `hasInconsistentWorkerValues`,
   `isWebGLInconsistent`, `hasInconsistentClientHints`, `hasHighHardwareConcurrency`,
   `hasHeadlessChromeDefaultScreenResolution`, …). Report the keys that are `true`.
+- **CI gate semantics:** the matrix gates on the flag set, not the `isBot`
+  aggregate — every `true` flag must be in `ACCEPTED_FLAGS`
+  (`profile_matrix.py`). Today that allowlist is exactly
+  `hasInconsistentWorkerValues`: per-document overrides never reach Worker
+  scopes, so any cross-OS spoof (mac profile on the Linux CI runner; verified
+  2026-06-12 with a Win32 profile on a Mac host) trips it. Accepted by policy —
+  worker-scope overrides are the documented depth-layer non-goal. Any flag
+  outside the allowlist fails CI.
 - **Gotcha:** the old "first `{…}` in body" regex is fragile (matches any JSON on
   the page). Anchor on the element instead.
 

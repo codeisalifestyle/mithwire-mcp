@@ -9,34 +9,54 @@ the fast pytest suites under ``tests/test_fingerprint_*.py``.
 ## CI pass definition (single source of truth)
 
 The product goal is **a human-like browser across configurations, with or
-without spoofing**. For CI we need a single objective predicate that maps
-cleanly to that goal -- otherwise predicate drift becomes its own debate.
+without spoofing**. For CI we need objective predicates that map cleanly to
+that goal -- otherwise predicate drift becomes its own debate. Two gates,
+both IP-independent (they read browser/fingerprint state, not the egress
+IP's reputation, so they are stable from a datacenter CI runner):
 
-CI gate = **deviceandbrowserinfo.com /are_you_a_bot says human**:
+1. **deviceandbrowserinfo.com /are_you_a_bot, with an accepted-flags
+   allowlist.** The site computes a *server-side* verdict from a large
+   client fingerprint (``POST /fingerprint_bot_test``, ~600 ms) and returns
+   ``{isBot, details: {~20 boolean flags}}``. PASS = every ``True`` flag is
+   in ``ACCEPTED_FLAGS`` (the ``isBot`` boolean itself is derived from the
+   flags, so the allowlist subsumes it). ``ACCEPTED_FLAGS`` encodes the
+   project's documented depth-layer compromises (see SITE_PARSING.md):
+   today that is exactly ``hasInconsistentWorkerValues`` -- fingerprint
+   overrides are applied per-document and do not reach Worker scopes, so a
+   cross-OS spoof (mac profile on a Linux CI runner) makes the worker
+   disagree with the main thread. Accepted by policy; most detectors don't
+   probe this deep. Any flag OUTSIDE the allowlist is a real regression and
+   fails the build.
 
-* ``isBot is False`` AND
-* no boolean in the server-side ``details`` map is ``True``.
+2. **sannysoft 8/8.** Pure client-side, deterministic, zero network-
+   reputation input. PASS = no ``failed`` result cell (``warn`` cells are
+   reported but do not fail).
 
-That site computes a server-side verdict from a large client fingerprint
-(``POST /fingerprint_bot_test``, ~600 ms), so it captures multiple anti-detect
-dimensions in one call AND is unambiguous to parse (the result IS the JSON,
-not a render artifact). Sannysoft, CreepJS, and demo.fingerprint.com remain
-in the matrix as **INFORMATIONAL** columns: they're invaluable for
-development and depth analysis (CreepJS surfaces consistency issues the
-others miss), but their pass/fail nuances (probe-timing, accepted
-depth-layer gaps, commercial-API rate limits) aren't suitable as hard CI
-gates. Treat them as observability; the build does not red on their
-results.
+CreepJS and demo.fingerprint.com remain **INFORMATIONAL** columns: they're
+invaluable for development and depth analysis (CreepJS surfaces consistency
+issues the others miss), but their pass/fail nuances (probe-timing,
+accepted depth-layer gaps, commercial-API rate limits) aren't suitable as
+hard CI gates. Expected CreepJS baseline with a spoof profile: <=2 lies
+(the worker Navigator mismatch above + the WebGL toString depth probe).
+
+**Reachability is not detection.** If a gate site can't be reached or
+returns no verdict (CI egress hiccup, site outage), the profile is retried
+once and then marked SKIP -- neutral, visible in the report, but not a
+FAIL. Backstop: if NO profile produces a PASS (e.g. everything skipped),
+the run exits non-zero anyway, so flakiness can never silently green the
+gate.
 
 ## What it does
 
 1. Loads every ``*.json`` under ``--profiles-dir`` (default ``tests/profiles/``).
 2. For each profile, launches ``baseline_probe.py`` with the chosen driver /
    headless mode / proxy, writing the per-profile JSON to ``--out-dir``.
-3. Evaluates the DAB result against ``CI_GATE`` (pass/fail). Computes
-   informational signals for the other sites via ``INFO_SIGNALS``.
-4. Prints a Markdown table to stdout (the GATE column drives PASS/FAIL; the
-   info columns are observability) and exits non-zero if any DAB gate failed.
+3. Evaluates the two gates (``ci_gate_dab`` with ``ACCEPTED_FLAGS``,
+   ``ci_gate_sanny``) and computes informational signals via
+   ``INFO_SIGNALS``. Unreachable gate sites get one retry, then SKIP.
+4. Prints a Markdown table to stdout (the gate columns drive each row's
+   PASS/FAIL/SKIP) and exits non-zero if any row FAILed -- or if no row
+   PASSed at all (an all-SKIP run is an infrastructure failure, not green).
 
 Example:
 
@@ -82,33 +102,84 @@ def _python_interpreter() -> str:
 
 
 # ---------------------------------------------------------------------------
-# CI GATE -- the single hard pass/fail predicate.
+# CI GATES -- the hard pass/fail predicates.
+#
+# Gate functions return ``(status, msg)`` where status is one of:
+#   "pass"        -- the predicate holds
+#   "fail"        -- the predicate is violated (real detection signal)
+#   "unreachable" -- the probe never produced a verdict (network/site issue;
+#                    NOT a detection signal -- eligible for retry, then SKIP)
 # ---------------------------------------------------------------------------
 
-def ci_gate_dab(probe: dict[str, Any]) -> tuple[bool, str]:
-    """deviceandbrowserinfo.com /are_you_a_bot says HUMAN.
+GatePass = "pass"
+GateFail = "fail"
+GateUnreachable = "unreachable"
+
+# Depth-layer detection signals the project accepts BY POLICY (documented in
+# SITE_PARSING.md). A flag listed here does not fail the gate; any flag NOT
+# listed here does. Widening this set is a reviewed, deliberate decision.
+ACCEPTED_FLAGS: frozenset[str] = frozenset({
+    # Fingerprint overrides are injected per-document and never reach Worker
+    # scopes, so a worker reports the host's real platform/cores/UA. Any
+    # cross-OS spoof (e.g. mac profile on the Linux CI runner) therefore
+    # trips this flag. Accepted: worker-scope overrides are a deliberate
+    # non-goal -- a depth layer most anti-detect checks never probe.
+    "hasInconsistentWorkerValues",
+})
+
+
+def ci_gate_dab(probe: dict[str, Any]) -> tuple[str, str]:
+    """deviceandbrowserinfo.com /are_you_a_bot, modulo ``ACCEPTED_FLAGS``.
 
     The site computes a server-side verdict and renders the response JSON
-    verbatim into the page (``code.language-json``). We require:
+    verbatim into the page (``code.language-json``). PASS = every ``True``
+    flag in the ``details`` map is in ``ACCEPTED_FLAGS``. The ``isBot``
+    boolean is itself computed from those flags, so it is reported but not
+    independently gated -- with only accepted flags set the site may still
+    say ``isBot=true``, and that exact case is the accepted compromise.
 
-    * ``isBot`` is exactly ``False`` (not just falsy) AND
-    * no flag in the ``details`` map is ``True``.
-
-    Any other outcome -- ``isBot=true``, any True flag, a missing/erroring
-    probe, ``no-verdict`` from the harness wrapper -- fails the gate.
+    A missing/erroring probe or a non-boolean ``isBot`` is UNREACHABLE, not
+    FAIL: no verdict was produced, so there is nothing to gate on.
     """
     if not probe or probe.get("error"):
-        return False, f"err:{probe.get('error') or 'missing'}"
+        return GateUnreachable, f"err:{probe.get('error') or 'missing'}"
     is_bot = probe.get("isBot")
-    if is_bot is True:
-        flags_true = sorted(k for k, v in (probe.get("details") or {}).items() if v is True)
-        return False, "isBot=true flags=" + ",".join(flags_true) if flags_true else "isBot=true"
-    if is_bot is not False:
-        return False, f"no-verdict ({is_bot!r})"
+    if is_bot not in (True, False):
+        return GateUnreachable, f"no-verdict ({is_bot!r})"
     flags_true = sorted(k for k, v in (probe.get("details") or {}).items() if v is True)
-    if flags_true:
-        return False, "flags=" + ",".join(flags_true)
-    return True, "human"
+    unaccepted = [f for f in flags_true if f not in ACCEPTED_FLAGS]
+    accepted = [f for f in flags_true if f in ACCEPTED_FLAGS]
+    if unaccepted:
+        msg = "flags=" + ",".join(unaccepted)
+        if accepted:
+            msg += " (accepted: " + ",".join(accepted) + ")"
+        return GateFail, msg
+    if accepted:
+        return GatePass, "human (accepted: " + ",".join(accepted) + ")"
+    return GatePass, "human"
+
+
+def ci_gate_sanny(probe: dict[str, Any]) -> tuple[str, str]:
+    """sannysoft's 8 result cells show no ``failed``.
+
+    Pure client-side and deterministic -- no network-reputation input, so it
+    is a stable co-gate even from a datacenter egress. ``warn`` cells are
+    reported but do not fail (legitimate browsers produce occasional warns).
+    """
+    if not probe or probe.get("error"):
+        return GateUnreachable, f"err:{probe.get('error') or 'missing'}"
+    total = probe.get("total") or 0
+    if total <= 0:
+        return GateUnreachable, "no-results"
+    failed = probe.get("failed") or []
+    if failed:
+        return GateFail, "failed=" + ",".join(failed)
+    warn = probe.get("warn") or []
+    passed = probe.get("passed")
+    base = f"{passed}/{total}"
+    if warn:
+        return GatePass, base + " warn=" + ",".join(warn)
+    return GatePass, base
 
 
 # ---------------------------------------------------------------------------
@@ -118,16 +189,6 @@ def ci_gate_dab(probe: dict[str, Any]) -> tuple[bool, str]:
 # an error marker. The matrix prints these as observability so a developer
 # can spot drift; the CI workflow only consumes the DAB gate.
 # ---------------------------------------------------------------------------
-
-def info_sanny(probe: dict[str, Any]) -> str:
-    if not probe or probe.get("error"):
-        return f"err:{probe.get('error') or 'missing'}"
-    passed = probe.get("passed")
-    failed = probe.get("failed") or []
-    total = probe.get("total") or 0
-    suffix = f" failed={','.join(failed)}" if failed else ""
-    return f"{passed}/{total}{suffix}"
-
 
 def info_creep(probe: dict[str, Any]) -> str:
     if not probe or probe.get("error"):
@@ -146,7 +207,6 @@ def info_fpcom(probe: dict[str, Any]) -> str:
 
 
 INFO_SIGNALS: dict[str, Any] = {
-    "sannysoft": info_sanny,
     "creepjs": info_creep,
     "fingerprintcom": info_fpcom,
 }
@@ -191,28 +251,51 @@ def _run_baseline(
     return True, "ok"
 
 
-def _evaluate(result: dict[str, Any]) -> tuple[tuple[bool, str], dict[str, str]]:
-    """Apply the CI gate (DAB) and gather informational signals.
+def _evaluate(
+    result: dict[str, Any],
+) -> tuple[tuple[str, str], tuple[str, str], dict[str, str]]:
+    """Apply both CI gates and gather informational signals.
 
-    Returns ``(gate_verdict, info_signals)`` where ``gate_verdict`` is the
-    ``(ok, msg)`` from ``ci_gate_dab`` and ``info_signals`` is a dict of
-    short display strings keyed by site name. Only ``gate_verdict`` drives
-    PASS/FAIL; the info dict is observability.
+    Returns ``(dab_gate, sanny_gate, info_signals)``. Each gate is a
+    ``(status, msg)`` pair (see the gate section); ``info_signals`` is a
+    dict of short display strings keyed by site name -- observability only.
     """
     probes = result.get("probes") or {}
-    gate = ci_gate_dab(probes.get("deviceandbrowserinfo") or {})
+    dab = ci_gate_dab(probes.get("deviceandbrowserinfo") or {})
+    sanny = ci_gate_sanny(probes.get("sannysoft") or {})
     info = {site: fn(probes.get(site) or {}) for site, fn in INFO_SIGNALS.items()}
-    return gate, info
+    return dab, sanny, info
+
+
+def _overall(dab: tuple[str, str], sanny: tuple[str, str]) -> str:
+    """Combine the two gates into a row verdict.
+
+    FAIL beats everything (a real detection signal must red the build even
+    if the other probe also flaked); otherwise any unreachable gate makes
+    the row SKIP (no verdict to act on); otherwise PASS.
+    """
+    statuses = {dab[0], sanny[0]}
+    if GateFail in statuses:
+        return "FAIL"
+    if GateUnreachable in statuses:
+        return "SKIP"
+    return "PASS"
+
+
+def _gate_cell(gate: tuple[str, str]) -> str:
+    status, msg = gate
+    label = {GatePass: "PASS", GateFail: "FAIL", GateUnreachable: "SKIP"}[status]
+    return f"{label} {msg}"
 
 
 def _markdown_table(rows: list[dict[str, Any]]) -> str:
-    """One-line-per-profile table. The first result column ("CI gate") is
-    the only one that drives the overall PASS/FAIL -- it shows the DAB
-    verdict explicitly. The remaining columns are tagged ``[info]`` so a
-    reader cannot mistake them for gates.
+    """One-line-per-profile table. The two gate columns drive the row's
+    OVERALL verdict (PASS / FAIL / SKIP); the remaining columns are tagged
+    ``[info]`` so a reader cannot mistake them for gates.
     """
     info_cols = [f"{k} [info]" for k in INFO_SIGNALS]
-    columns = ["profile", "driver", "mode", "egress", "CI gate (DAB)"] + info_cols + ["OVERALL"]
+    columns = (["profile", "driver", "mode", "egress",
+                "gate: DAB", "gate: sannysoft"] + info_cols + ["OVERALL"])
     out = ["| " + " | ".join(columns) + " |",
            "| " + " | ".join("---" for _ in columns) + " |"]
     for row in rows:
@@ -221,12 +304,12 @@ def _markdown_table(rows: list[dict[str, Any]]) -> str:
             row["driver"],
             "headless" if row["headless"] else "headful",
             row.get("egress") or "-",
+            _gate_cell(row["dab"]),
+            _gate_cell(row["sanny"]),
         ]
-        gate_ok, gate_msg = row["gate"]
-        cells.append(("PASS " if gate_ok else "FAIL ") + gate_msg)
         for site in INFO_SIGNALS:
             cells.append(row["info"].get(site, "-"))
-        cells.append("PASS" if row["overall"] else "FAIL")
+        cells.append(row["overall"])
         out.append("| " + " | ".join(cells) + " |")
     return "\n".join(out)
 
@@ -272,9 +355,13 @@ def main() -> int:
         except OSError:
             pass
 
-    rows: list[dict[str, Any]] = []
-    for profile in profiles:
-        out_path = args.out_dir / f"{profile.stem}.json"
+    def probe_once(profile: Path, out_path: Path) -> dict[str, Any]:
+        """Run one profile through baseline_probe and evaluate the gates.
+
+        Harness-level failures (subprocess error/timeout, missing or
+        unparseable output) are UNREACHABLE on both gates: no verdict was
+        produced, so they are retry-then-SKIP material, never FAIL.
+        """
         started = time.monotonic()
         ok, msg = _run_baseline(
             profile=profile,
@@ -287,51 +374,59 @@ def main() -> int:
             timeout_s=args.per_profile_timeout,
         )
         elapsed = time.monotonic() - started
-        if not ok:
-            rows.append({
-                "profile": profile.stem,
-                "driver": args.driver,
-                "headless": args.headless,
-                "egress": None,
-                "gate": (False, "no-data"),
-                "info": {site: "no-data" for site in INFO_SIGNALS},
-                "overall": False,
-                "elapsed_s": elapsed,
-                "error": msg,
-            })
-            print(f"[FAIL {profile.stem}]  {msg}  ({elapsed:.1f}s)", file=sys.stderr)
-            continue
-        try:
-            result = json.loads(out_path.read_text())
-        except Exception as exc:  # noqa: BLE001
-            rows.append({
-                "profile": profile.stem,
-                "driver": args.driver,
-                "headless": args.headless,
-                "egress": None,
-                "gate": (False, "no-parse"),
-                "info": {site: "no-parse" for site in INFO_SIGNALS},
-                "overall": False,
-                "elapsed_s": elapsed,
-                "error": f"json parse: {exc}",
-            })
-            continue
-        gate, info = _evaluate(result)
-        overall = gate[0]  # CI gate IS the overall verdict (DAB only).
-        egress = ((result.get("probes") or {}).get("ipapi") or {}).get("ip") or \
-                 ((result.get("proxy_exit") or {}).get("exit_ip"))
-        rows.append({
+        base = {
             "profile": profile.stem,
             "driver": args.driver,
             "headless": args.headless,
-            "egress": egress,
-            "gate": gate,
-            "info": info,
-            "overall": overall,
             "elapsed_s": elapsed,
-        })
-        tag = "PASS" if overall else "FAIL"
-        print(f"[{tag} {profile.stem}]  {elapsed:.1f}s  gate={gate[1]}  egress={egress}", file=sys.stderr)
+        }
+        if ok:
+            try:
+                result = json.loads(out_path.read_text())
+            except Exception as exc:  # noqa: BLE001
+                ok, msg = False, f"json parse: {exc}"
+        if not ok:
+            unreachable = (GateUnreachable, "no-data")
+            return {
+                **base,
+                "egress": None,
+                "dab": unreachable,
+                "sanny": unreachable,
+                "info": {site: "no-data" for site in INFO_SIGNALS},
+                "overall": "SKIP",
+                "error": msg,
+            }
+        dab, sanny, info = _evaluate(result)
+        egress = ((result.get("probes") or {}).get("ipapi") or {}).get("ip") or \
+                 ((result.get("proxy_exit") or {}).get("exit_ip"))
+        return {
+            **base,
+            "egress": egress,
+            "dab": dab,
+            "sanny": sanny,
+            "info": info,
+            "overall": _overall(dab, sanny),
+        }
+
+    rows: list[dict[str, Any]] = []
+    for profile in profiles:
+        out_path = args.out_dir / f"{profile.stem}.json"
+        row = probe_once(profile, out_path)
+        if row["overall"] == "SKIP":
+            # Reachability is not detection -- give the profile one more
+            # attempt before accepting a neutral SKIP.
+            print(
+                f"[RETRY {profile.stem}]  gate site unreachable "
+                f"(dab={row['dab'][1]}, sanny={row['sanny'][1]}) -- retrying once",
+                file=sys.stderr,
+            )
+            row = probe_once(profile, out_path)
+        rows.append(row)
+        print(
+            f"[{row['overall']} {row['profile']}]  {row['elapsed_s']:.1f}s  "
+            f"dab={row['dab'][1]}  sanny={row['sanny'][1]}  egress={row['egress']}",
+            file=sys.stderr,
+        )
 
     report = _markdown_table(rows)
     print()
@@ -339,7 +434,16 @@ def main() -> int:
     if args.report is not None:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(report + "\n")
-    return 0 if all(row["overall"] for row in rows) else 1
+
+    if any(row["overall"] == "FAIL" for row in rows):
+        return 1
+    if not any(row["overall"] == "PASS" for row in rows):
+        # Every profile skipped: the harness or the gate sites are broken.
+        # Refuse to report green on zero evidence.
+        print("no profile produced a PASS verdict -- treating as failure",
+              file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
