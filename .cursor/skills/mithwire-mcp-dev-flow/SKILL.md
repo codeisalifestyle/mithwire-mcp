@@ -196,25 +196,73 @@ python3 .cursor/skills/mithwire-mcp-dev-flow/scripts/prune-dev-mcps.py
 
 When the package is published to PyPI, swap the user-level entry from the
 main checkout's `.venv/bin/mithwire-mcp` to a
-`pipx install mithwire-mcp` location and update via
-`pipx upgrade`. That's a one-config-edit migration; the rest of the
-architecture is unchanged.
+`uvx mithwire-mcp` invocation. That's a one-config-edit migration; the rest
+of the architecture is unchanged.
+
+## Releasing (release-please + Trusted Publishing)
+
+Both repos publish to PyPI the same way. Code on `main` is allowed to be
+ahead of the published package — that gap is a release waiting to be cut,
+not a defect. The pipeline guarantees traceability instead of
+synchronicity: every PyPI version maps to a tagged commit, and the
+version in `pyproject.toml` at that tag equals the tag.
+
+How it flows (all of it lives in `.github/workflows/release.yml`, because
+PyPI Trusted Publishing matches the OIDC token against that exact workflow
+filename + environment — the upload step can't move to another file):
+
+1. **You push conventional commits to `main`** (via PR; CI gates the merge).
+2. **`release-please` opens/updates a release PR** — it computes the next
+   version from the commit types since the last tag (`feat` → minor,
+   `fix` → patch, `feat!`/`BREAKING CHANGE` → minor while pre-1.0 because
+   `bump-minor-pre-major` is set), and writes the `pyproject.toml` bump +
+   `CHANGELOG.md` entries into the PR. Docs/chore/ci/test commits don't
+   trigger a release.
+3. **You merge the release PR when you decide it's time.** That merge is a
+   push to `main`, so the same `release.yml` run: release-please creates the
+   tag + GitHub Release, then the `build` → `testpypi` → `pypi` jobs run.
+   `pypi` is gated on a non-prerelease version and carries the manual
+   approval gate via the `pypi` environment.
+
+Dry-run the publish chain without cutting a release — Actions tab → the
+`release` workflow → **Run workflow**. That builds a throwaway
+`<version>.devNNNN` and pushes only to TestPyPI, exercising
+OIDC → environment → trusted publisher → upload end to end.
+
+One-time setup per package (no API for this — web UI only):
+
+- TestPyPI: https://test.pypi.org/manage/account/publishing/ — add a
+  pending publisher (owner, repo, workflow `release.yml`, environment
+  `testpypi`).
+- PyPI (only when ready for prod): same form at pypi.org, environment
+  `pypi`.
+- GitHub: create environments `testpypi` (no gate) and `pypi` (required
+  reviewer = you) under repo Settings → Environments.
+
+To make merging the release PR auto-publish without any manual tag push,
+release-please's tag must trigger downstream — but tags pushed by
+`GITHUB_TOKEN` don't trigger other workflows. We sidestep that by keeping
+the publish jobs in the SAME `release.yml` run as release-please (gated on
+its `release_created` output), so no PAT is needed.
 
 ### Engine releases (cross-repo coordination)
 
-The engine has its own release cadence. When stable code in this repo
-needs an engine bump:
+The engine has its own release cadence and its own identical pipeline.
+mithwire-mcp's wheel hard-depends on the engine via PyPI
+(`mithwire>=0.50,<0.60`), so when a feature spans both layers, release the
+engine FIRST:
 
 ```bash
-# 1. Land the engine change.
+# 1. Land + release the engine change.
 cd ~/Projects/mithwire
 git checkout main && git pull
-# … merge engine PR, tag/release as 0.50.x, publish to PyPI …
+# … merge the feature PR, then merge the release-please PR → engine
+#   tags + publishes (e.g. 0.51.0) through its own release.yml …
 
-# 2. Bump the floor in this repo's pyproject.toml.
+# 2. Bump the floor in this repo if the MCP needs the new engine API.
 cd ~/Projects/mithwire-mcp
-sed -i '' 's/mithwire>=0\.50,<0\.60/mithwire>=0.50.4,<0.60/' pyproject.toml
-uv sync           # pulls the new engine from PyPI
+sed -i '' 's/mithwire>=0\.50,<0\.60/mithwire>=0.51,<0.60/' pyproject.toml
+# Commit as `feat:` or `fix:` so release-please bumps the MCP too.
 ```
 
 If you're running a dev MCP that pinned `--engine-source`, that dev
@@ -222,6 +270,28 @@ entry will keep loading from your local engine checkout regardless of
 what's on PyPI — switch back to PyPI by re-registering without the
 flag, or update the engine checkout (`git pull` inside it) and bump the
 nonce.
+
+### Cross-repo development (one feature, both repos)
+
+When a change spans engine + MCP, run two worktrees — one per repo — with
+matching branch names, and open both as a single multi-root Cursor
+workspace:
+
+```bash
+# Matching branch in each repo.
+git -C ~/Projects/mithwire     worktree add ~/Projects/mithwire-worktrees/feat-x     feat/x
+git -C ~/Projects/mithwire-mcp worktree add ~/Projects/mithwire-mcp-worktrees/feat-x feat/x
+
+# Register ONE dev MCP from the MCP worktree, pointing at the engine worktree
+# so `import mithwire` resolves to your engine branch (not PyPI / editable):
+cd ~/Projects/mithwire-mcp-worktrees/feat-x
+python3 .cursor/skills/mithwire-mcp-dev-flow/scripts/register-dev-mcp.py \
+    --branch --engine-source ~/Projects/mithwire-worktrees/feat-x
+```
+
+Now editing either tree and reloading picks up both. Commit + PR each repo
+independently; merge engine first, then MCP (see cross-repo coordination
+above).
 
 ## Apply code changes to the running Cursor MCP (no Cursor restart)
 
