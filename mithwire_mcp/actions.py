@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .browser import BridgeBrowser
+from .cookies import resolve_cookie_path
 from .state_store import SECRET_FILE_MODE, secure_write_text
 
 DEFAULT_ACTION_WAIT_SECONDS = 1.2
@@ -796,6 +797,7 @@ async def save_cookies(
     domain: str | None = None,
     timeout_seconds: float = 10.0,
     allow_document_cookie_fallback: bool = True,
+    cookies_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     fallback_used = False
     fallback_reason: str | None = None
@@ -830,7 +832,11 @@ async def save_cookies(
             )
 
     cookies = _filter_cookie_rows(cookies, domain=domain)
-    path = Path(output_path).expanduser()
+    # Bare filenames and single-segment relative paths land in the managed
+    # cookies/ inbox so a "save then load by name" round-trip Just Works
+    # without callers having to know the state-root absolute path. Absolute
+    # and ``~``-prefixed paths keep working unchanged.
+    path = resolve_cookie_path(output_path, cookies_dir=cookies_dir)
     payload: Any = {"cookies": cookies} if wrap_object else cookies
     # Cookie jars hold session tokens; write owner-only and atomically.
     secure_write_text(path, json.dumps(payload, ensure_ascii=True, indent=2))

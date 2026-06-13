@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from . import actions as action_ops
 from .actions import ensure_observers, get_url_and_title
 from .browser import BridgeBrowser
-from .cookies import load_cookie_file
+from .cookies import load_cookie_file, resolve_cookie_path
 from .fingerprint import FingerprintConfig
 from .proxy import _redact_rotation_url, parse_proxy
 from .proxy_health import (
@@ -340,6 +340,11 @@ class BrowserSessionManager:
 
     async def get_state_paths(self) -> dict[str, Any]:
         return self._state_store.paths_summary()
+
+    @property
+    def cookies_dir(self) -> Path:
+        """Managed cookies inbox; resolution root for relative cookie paths."""
+        return self._state_store.cookies_dir
 
     async def list_profiles(self) -> dict[str, Any]:
         profiles = self._state_store.list_profiles()
@@ -1078,7 +1083,17 @@ class BrowserSessionManager:
         resolved_cookie_file: str | None = None
         cookie_file_from_values = resolved_values.get("cookie_file")
         if isinstance(cookie_file_from_values, str) and cookie_file_from_values.strip():
-            resolved_cookie_file = str(Path(cookie_file_from_values).expanduser())
+            # Bare filenames / relative paths resolve against the managed
+            # cookies/ inbox so a profile or preset can carry just
+            # ``cookie_file: "site.json"`` instead of an absolute path that
+            # only makes sense on one machine. Absolute and ``~`` paths keep
+            # working unchanged.
+            resolved_cookie_file = str(
+                resolve_cookie_path(
+                    cookie_file_from_values,
+                    cookies_dir=self._state_store.cookies_dir,
+                )
+            )
         resolved_values["cookie_file"] = resolved_cookie_file
 
         return {
