@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import signal
+import sys
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
@@ -1270,6 +1271,7 @@ def create_server(
         timeout_seconds: float = 10.0,
         allow_document_cookie_fallback: bool = True,
     ) -> dict[str, Any]:
+        cookies_dir = manager.cookies_dir
         return await manager.run_action(
             session_id=session_id,
             action_name="browser_cookies_save",
@@ -1280,6 +1282,7 @@ def create_server(
                 domain=domain,
                 timeout_seconds=timeout_seconds,
                 allow_document_cookie_fallback=allow_document_cookie_fallback,
+                cookies_dir=cookies_dir,
             ),
             action_args={
                 "output_path": output_path,
@@ -1563,6 +1566,18 @@ async def _run_with_dashboard(
 
 
 def main() -> None:
+    # Dispatch subcommands before building the server parser so subcommand
+    # flags can't accidentally clash with server flags (e.g. --state-root is
+    # legitimate for both). We don't use argparse subparsers here because the
+    # default invocation (no subcommand -> run the server) carries enough
+    # options that nesting them under a subparser hurts ergonomics for the
+    # common case.
+    argv = sys.argv[1:]
+    if argv and argv[0] == "migrate-state":
+        from .migrate import main as migrate_main
+
+        raise SystemExit(migrate_main(argv[1:]))
+
     parser = build_parser()
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level, logging.INFO))
