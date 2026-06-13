@@ -152,7 +152,8 @@ Everything else is an optional flag on top of those two:
 | `start_url` | none | Navigate here right after launch. |
 | `cookie_file` | none | One-shot injection of cookies from a JSON file at launch. |
 | `sandbox` | `true` | Keep Chromium's sandbox on (recommended; `--no-sandbox` is easily bot-detected). |
-| `launch_config` | `default` | Apply a saved set of launch settings. |
+| `preset` | none | Apply a named preset (a shared bundle of launch settings stored under `presets/<name>.json`). |
+| `proxy_ref` | none | Use a named entry from the proxy registry instead of inlining credentials in `proxy`. |
 
 ### 🌍 Proxy support
 
@@ -195,7 +196,7 @@ persistent profile. A bad proxy fails fast with an actionable error.
 egress lookup: when a proxy is set, the session defaults its identity —
 **timezone, locale, languages, Accept-Language, and geolocation** — to the proxy's
 egress IP so the two never disagree. Anything explicitly set in `fingerprint={...}`
-or in the profile's `launch_overrides` wins. SOCKS proxies get a TCP-only liveness
+or in the profile's `launch_options` wins. SOCKS proxies get a TCP-only liveness
 check, with timezone alignment falling back to the in-browser ipapi.is lookup. The
 detected egress (`ip`, `timezone`, `city`, `country`, `country_code`) is recorded
 in session metadata under `proxy_exit`.
@@ -255,6 +256,13 @@ A managed `profile` stores its cookies in Chromium's native cookie store, so the
 persist automatically — nothing extra to manage. The only separate cookie
 operations are **injection** (`cookie_file` at launch, or `browser_cookies_set` at
 runtime) and **export** (`browser_cookies_get` / `browser_cookies_save`).
+
+🗂️ `cookie_file` and `browser_cookies_save`'s `output_path` resolve **relative
+paths** against the managed `~/.mithwire-mcp/cookies/` inbox: a profile can carry
+`"cookie_file": "twitter.json"` instead of an absolute path that only makes sense
+on one machine, and a `browser_cookies_save` with `output_path: "exit.json"` lands
+in the same place ready to be re-injected next session. Absolute and
+`~`-prefixed paths are returned unchanged for full back-compat.
 
 ## 🗄️ Centralized browser state store
 
@@ -332,6 +340,34 @@ On startup the state store transparently fixes up the previous schema:
 - `profile.json`: the old `launch_config` and `launch_overrides` keys are
   rewritten to `preset` and `launch_options` respectively, in place. Atomic
   and idempotent — safe to re-run on every server start.
+
+For an **explicit** report (what got renamed, which profiles were rewritten,
+whether a legacy `presets/default.json` is hanging around no-op, and which
+inlined proxies could be deduplicated into the registry) run the dedicated
+subcommand:
+
+```bash
+# Dry-run: simulate against a temp copy, print the report, change nothing.
+mithwire-mcp migrate-state --dry-run --extract-proxies
+
+# Apply for real, auto-name extracted proxy entries from host:port.
+mithwire-mcp migrate-state --extract-proxies --auto-name
+
+# Or omit --extract-proxies to leave inlined proxies alone for now —
+# they keep working; the report just surfaces them as candidates.
+mithwire-mcp migrate-state
+```
+
+`--extract-proxies` collapses inlinings that share the same upstream
+credentials into a single `proxies/<name>.json` and rewrites every call-site
+to reference it by name. Idempotent: re-running after a successful migration
+is a no-op.
+
+> **Note on `default.json`.** In the old layout, `configs/default.json`
+> auto-applied as a baseline for every session. After migration, the renamed
+> `presets/default.json` is **not** applied implicitly — link it from a
+> profile via `"preset": "default"`, or move its values inline. The migration
+> command logs this once so the behavioural difference is never silent.
 
 ## 🧰 Tools exposed
 
