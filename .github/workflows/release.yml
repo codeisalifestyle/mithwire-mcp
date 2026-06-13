@@ -136,11 +136,16 @@ jobs:
           if-no-files-found: error
 
   # 3. TestPyPI: always runs after a successful build (dry run or real release
-  #    or tag replay). skip-existing keeps a re-run idempotent instead of
-  #    hard-failing on a version that is already on the index.
+  #    or tag replay). ``always() && build == success`` is required because
+  #    GitHub Actions' implicit ``success()`` gate evaluates the *transitive*
+  #    needs graph, so a skipped ``release-please`` (workflow_dispatch path)
+  #    cascades a skip through ``build`` even when build itself succeeded.
+  #    ``skip-existing`` keeps a re-run idempotent instead of hard-failing on
+  #    a version that is already on the index.
   testpypi:
     name: Publish to TestPyPI
     needs: build
+    if: ${{ always() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:
@@ -157,11 +162,13 @@ jobs:
 
   # 4. PyPI: stable releases only. Driven by the build's own ``publish_pypi``
   #    output so both the release-please path and a tag-replay dispatch share
-  #    the same decision rule (non-prerelease version => publish).
+  #    the same decision rule (non-prerelease version => publish). The
+  #    ``always() && build == success`` clause is the same skip-cascade
+  #    countermeasure as on ``testpypi``.
   pypi:
     name: Publish to PyPI
     needs: build
-    if: ${{ needs.build.outputs.publish_pypi == 'true' }}
+    if: ${{ always() && needs.build.result == 'success' && needs.build.outputs.publish_pypi == 'true' }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
