@@ -45,7 +45,9 @@ class BridgeBrowser:
         self.browser_executable_path = browser_executable_path
         self.sandbox = sandbox
         self.proxy = proxy
-        self.fingerprint = fingerprint or FingerprintConfig()
+        # Configured identity. Engine-owned stealth is the source of truth once
+        # the browser is started; see the ``fingerprint`` property below.
+        self._fingerprint = fingerprint or FingerprintConfig()
         # WebRTC leak protection mode. An HTTP/SOCKS proxy cannot carry STUN/UDP,
         # so WebRTC queries STUN over the physical NIC and the server-reflexive
         # (srflx) candidate betrays the real public IP -- the #1 proxy leak, and
@@ -60,9 +62,7 @@ class BridgeBrowser:
         #     absence is itself a mild tell and breaks legitimate WebRTC use).
         #   * "off": no WebRTC tampering.
         self.webrtc_leak_protection = (webrtc_leak_protection or "auto").strip().lower()
-        self.timezone_id: str | None = None
         self.proxy_exit_info: dict[str, Any] | None = None
-        self._page_domain_tab: Any | None = None
         self.browser: Any = None
         self.tab: Any = None
         self._cdp_network: Any = None
@@ -70,7 +70,6 @@ class BridgeBrowser:
         self._cdp_input: Any = None
         self._cdp_page: Any = None
         self._cdp_fetch: Any = None
-        self._cdp_emulation: Any = None
         self._proxy_auth_handler_tab: Any = None
         self._proxy_request_paused_handler: Any = None
         self._proxy_auth_required_handler: Any = None
@@ -108,11 +107,9 @@ class BridgeBrowser:
         await self.close()
 
     async def start(self) -> None:
-        """Launch a fresh, owned browser process."""
+        """Launch a fresh, owned browser process with engine-applied stealth."""
         try:
             import mithwire as uc
-            import mithwire.cdp.browser as cdp_browser
-            import mithwire.cdp.emulation as cdp_emulation
             import mithwire.cdp.fetch as cdp_fetch
             import mithwire.cdp.input_ as cdp_input
             import mithwire.cdp.network as cdp_network
@@ -126,17 +123,29 @@ class BridgeBrowser:
                 "is installed in this MCP environment."
             ) from exc
 
+        # The MCP is a *client* of the engine: it still needs these CDP domains
+        # for its own features (proxy-auth relay, cookies, key input, dialogs,
+        # downloads, network capture). All anti-detect stealth — fingerprint
+        # application, headless UA cleanup, WebRTC leak protection, the stealth
+        # shim, timezone override — is owned by the engine and reached via
+        # ``self.browser.stealth`` (see the delegating wrappers below).
         self._cdp_network = cdp_network
         self._cdp_storage = cdp_storage
         self._cdp_input = cdp_input
         self._cdp_page = cdp_page
         self._cdp_fetch = cdp_fetch
-        self._cdp_emulation = cdp_emulation
-        self._cdp_browser = cdp_browser
 
         config_kwargs: dict[str, Any] = {
             "headless": self.headless,
             "sandbox": self.sandbox,
+            # Describe the identity and WebRTC mode; the engine applies them.
+            # It derives the stealth launch flags (--lang,
+            # --force-webrtc-ip-handling-policy, headless --window-size) from
+            # these via ``compute_launch_args`` and applies the live CDP/JS
+            # patches during start, exposing the controller as
+            # ``self.browser.stealth``.
+            "fingerprint": self._fingerprint,
+            "webrtc_leak_protection": self.webrtc_leak_protection,
         }
         if self.user_data_dir:
             config_kwargs["user_data_dir"] = self.user_data_dir
@@ -144,15 +153,16 @@ class BridgeBrowser:
             config_kwargs["browser_executable_path"] = self.browser_executable_path
 
         merged_args: list[str] = list(self.browser_args)
-        if self.headless:
-            merged_args.append("--window-size=1920,1080")
         # Resolve the value Chromium gets for ``--proxy-server``. For an
         # authenticated HTTP(S) upstream we start a local authenticating relay
         # and point Chromium at *that* (unauthenticated, on localhost) so the
         # browser never sees a 407. Credentials are injected by the relay. This
         # avoids per-request CDP Fetch interception, which floods the event loop
         # and stalls heavy page loads. Unauthenticated proxies (and SOCKS) go
-        # straight to ``--proxy-server`` as before.
+        # straight to ``--proxy-server`` as before. The engine infers proxy
+        # presence (and therefore the WebRTC IP-handling policy) purely from the
+        # presence of this flag — it stays agnostic of this client's proxy
+        # abstraction.
         if (
             self.proxy is not None
             and self.proxy.has_auth
@@ -167,33 +177,6 @@ class BridgeBrowser:
                 merged_args.append(self._proxy_relay.proxy_server_arg())
             else:
                 merged_args.append(self.proxy.proxy_server_arg())
-        # WebRTC leak protection. A page can use a WebRTC STUN connection to
-        # learn the host's real local and public IPs directly, bypassing the
-        # HTTP/SOCKS proxy entirely (UDP is not proxied) — the single biggest
-        # de-anonymization leak for a proxied browser. We pin Chromium's IP
-        # handling policy so this can't happen:
-        #   * proxied  -> disable_non_proxied_udp: WebRTC may only use UDP that
-        #     the proxy supports (else TCP), so it can never reveal the real
-        #     egress IP behind the proxy.
-        #   * direct   -> default_public_interface_only: the public IP is the
-        #     real IP anyway (consistent), but private/LAN IPs stay hidden.
-        if not any(
-            "webrtc-ip-handling-policy" in arg for arg in merged_args
-        ):
-            policy = (
-                "disable_non_proxied_udp"
-                if self.proxy is not None
-                else "default_public_interface_only"
-            )
-            merged_args.append(f"--force-webrtc-ip-handling-policy={policy}")
-        # Language must be pinned at launch: ``--lang`` is applied by Chromium
-        # itself, so it propagates to navigator.language(s), the Accept-Language
-        # header, and Web Workers consistently. A runtime CDP override cannot
-        # rewrite navigator.languages in already-spawned workers, so the launch
-        # flag is the only leak-free way to set it.
-        fp_language = self.fingerprint.primary_language
-        if fp_language and not any(arg.startswith("--lang=") for arg in merged_args):
-            merged_args.append(f"--lang={fp_language}")
         if merged_args:
             config_kwargs["browser_args"] = merged_args
 
@@ -216,14 +199,10 @@ class BridgeBrowser:
             ) from exc
 
         self.tab = getattr(self.browser, "main_tab", None)
-        await asyncio.sleep(1.2)
-
-        await self._inject_stealth_script()
-        await self._inject_webrtc_protection()
-        if self.headless:
-            await self._apply_headless_user_agent()
-        if not self.fingerprint.is_empty:
-            await self.apply_fingerprint(self.fingerprint)
+        # The engine already applied the always-on stealth baseline plus any
+        # configured identity inside ``uc.start`` (with its own settle delay)
+        # and stored the live controller on ``self.browser.stealth``. Only the
+        # proxy-auth challenge handler remains this client's responsibility.
         await self._ensure_proxy_auth_handler()
 
     async def close(self) -> None:
@@ -280,7 +259,6 @@ class BridgeBrowser:
             self._proxy_auth_required_handler = None
             self._proxy_fetch_enabled = False
             self._proxy_relay = None
-            self.timezone_id = None
             self.proxy_exit_info = None
 
     async def _ensure_proxy_auth_handler(self) -> None:
@@ -431,805 +409,58 @@ class BridgeBrowser:
                 except OSError:
                     return  # exited
 
-    async def _ensure_page_domain(self) -> None:
-        """Enable the CDP Page domain once on the active tab.
+    # ------------------------------------------------------------------
+    # Anti-detect stealth — delegated to the engine.
+    #
+    # The mithwire engine owns every browser-altering anti-detect capability
+    # (fingerprint application, headless UA cleanup, WebRTC leak protection,
+    # the new-document stealth shim, and the timezone override). It applies the
+    # always-on baseline plus any configured identity during ``uc.start`` and
+    # exposes the live controller as ``self.browser.stealth``. This client only
+    # *describes* the identity (passed to ``uc.start`` in ``start``) and forwards
+    # later re-application requests to that controller. The thin wrappers below
+    # keep the historical call sites stable.
+    # ------------------------------------------------------------------
+    def _stealth(self) -> Any:
+        """Return the engine stealth controller, pinned to the active tab.
 
-        ``Page.addScriptToEvaluateOnNewDocument`` only actually injects when the
-        Page domain is enabled on that target's session (mithwire does the same
-        in ``_prepare_expert``). Without this, registered scripts silently never
-        run on subsequent documents.
+        The engine builds the controller against the launch tab; we re-point it
+        at whichever tab this wrapper is currently driving so a re-applied
+        identity or injected new-document script lands where the client expects
+        (the previous in-client implementations all operated on ``self.tab``).
         """
-        if self.tab is None or self._cdp_page is None:
-            return
-        if getattr(self, "_page_domain_tab", None) is self.tab:
-            return
-        try:
-            await self.tab.send(self._cdp_page.enable())
-            self._page_domain_tab = self.tab
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Page.enable() failed: %s", exc)
+        if self.browser is None or getattr(self.browser, "stealth", None) is None:
+            raise RuntimeError("Browser not started")
+        stealth = self.browser.stealth
+        stealth.tab = self.tab
+        return stealth
 
-    async def _inject_stealth_script(self) -> None:
-        await self._ensure_page_domain()
-        # Intentionally do NOT override navigator.webdriver here. Chromium
-        # already exposes it as a NATIVE getter on Navigator.prototype that
-        # returns `false` (it only flips to `true` under --enable-automation,
-        # which this launcher never sets). Re-defining it with
-        # Object.defineProperty(navigator, 'webdriver', ...) installs a
-        # non-native getter as an OWN property on the instance, which shadows
-        # the prototype getter and is itself a detectable tell (e.g. sannysoft
-        # "WebDriver (New)" flags the tampered descriptor even when the value is
-        # false). Verified against clean-Chrome and HEAD baselines: leaving the
-        # native getter untouched passes where the override fails.
-        #
-        # The chrome object shim is kept (no-op when window.chrome already
-        # exists, e.g. headful) to avoid an empty/missing window.chrome in some
-        # headless contexts.
-        script = """
-            window.chrome = window.chrome || { runtime: {} };
+    @property
+    def fingerprint(self) -> FingerprintConfig:
+        """The identity in effect.
+
+        Before launch this is the configured identity; once started the engine
+        controller is the source of truth — it folds any later
+        ``apply_fingerprint`` overrides into its own copy via ``merged_with``.
         """
-        await self.tab.send(self._cdp_page.add_script_to_evaluate_on_new_document(source=script))
+        stealth = getattr(self.browser, "stealth", None)
+        if stealth is not None and getattr(stealth, "fingerprint", None) is not None:
+            return stealth.fingerprint
+        return self._fingerprint
 
-    def _resolve_webrtc_action(self) -> str | None:
-        """Decide the effective WebRTC action for this session ('filter'/'disable'/None)."""
-        mode = self.webrtc_leak_protection
-        if mode == "off":
-            return None
-        if mode == "disable":
-            return "disable"
-        if mode == "filter":
-            return "filter"
-        # "auto" (and any unknown value): protect only when proxied, since a
-        # direct connection's public WebRTC candidate is the legitimate IP.
-        return "filter" if self.proxy is not None else None
-
-    async def _inject_webrtc_protection(self) -> None:
-        """Inject the WebRTC leak guard as an all-frames new-document script.
-
-        Runs before page scripts on every navigation/frame. Self-contained: it
-        bundles its own native-toString mask so the patched accessors/methods
-        stringify as native even when no fingerprint document JS is injected.
-        """
-        action = self._resolve_webrtc_action()
-        if action is None:
-            return
-        script = self._webrtc_protection_js(action)
-        try:
-            await self.tab.send(
-                self._cdp_page.add_script_to_evaluate_on_new_document(source=script)
-            )
-            logger.info("Injected WebRTC leak protection (mode=%s).", action)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not inject WebRTC leak protection: %s", exc)
-
-    def _webrtc_protection_js(self, action: str) -> str:
-        if action == "disable":
-            # Remove the constructors outright. WebRTC absence is a mild tell but
-            # cannot leak. Both the standard and webkit-prefixed names are cleared.
-            return """
-            (function () {
-              const drop = (name) => {
-                try { Object.defineProperty(window, name, { value: undefined, configurable: true }); }
-                catch (e) { try { delete window[name]; } catch (e2) {} }
-              };
-              drop('RTCPeerConnection');
-              drop('webkitRTCPeerConnection');
-              drop('mozRTCPeerConnection');
-              drop('RTCDataChannel');
-            })();
-            """
-        # action == "filter": drop public, non-mDNS ICE candidates so the real
-        # IP never reaches the page. We patch only RTCPeerConnection.prototype
-        # members that are NORMALLY own properties of that prototype (the
-        # onicecandidate accessor, the localDescription accessors, and
-        # createOffer/createAnswer), so no own-property tell is introduced.
-        #
-        # We deliberately do NOT use the global Function.prototype.toString mask
-        # (_NATIVE_MASK_PREAMBLE) here: this guard is ALWAYS-ON (no-spoof path),
-        # and globally reassigning Function.prototype.toString is itself a strong
-        # CreepJS tell that cascades into ~9 component "lies" (Timezone, WebGL,
-        # Canvas, Audio, Math, ...). Instead each replacement gets a light,
-        # local own-`toString` so `fn.toString()`/`fn + ''` read native, without
-        # touching the global. (Advanced Function.prototype.toString.call probing
-        # of these specific WebRTC members is an accepted depth-layer gap -- far
-        # cheaper than re-leaking the real IP or tripping 9 lies.)
-        return (
-            r"""
-            (function () {
-              const RTC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
-              if (!RTC || !RTC.prototype || RTC.prototype.__nrRtcGuard) return;
-              const proto = RTC.prototype;
-              const __nrMask = (fn, name) => {
-                try {
-                  Object.defineProperty(fn, 'toString', {
-                    value: function toString() { return 'function ' + name + '() { [native code] }'; },
-                    configurable: true, writable: true,
-                  });
-                } catch (e) {}
-                return fn;
-              };
-              const isPublic = (addr) => {
-                if (!addr) return false;
-                addr = ('' + addr).toLowerCase();
-                if (addr.indexOf('.local') >= 0 || addr.indexOf('mdns') >= 0) return false;
-                if (addr.indexOf(':') >= 0) {
-                  return !(addr.indexOf('fe80') === 0 || addr.indexOf('fc') === 0 || addr.indexOf('fd') === 0);
-                }
-                if (/^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(addr)) return false;
-                return /^\d{1,3}(\.\d{1,3}){3}$/.test(addr);
-              };
-              const candAddr = (s) => { const p = ('' + s).split(' '); return p[4] || ''; };
-              const candBlocked = (cand) => {
-                try {
-                  const s = cand && (cand.candidate !== undefined ? cand.candidate : cand);
-                  return s ? isPublic(candAddr(s)) : false;
-                } catch (e) { return false; }
-              };
-              const scrubSdp = (sdp) => {
-                if (!sdp) return sdp;
-                return ('' + sdp).split('\r\n').filter((line) => {
-                  const i = line.indexOf('candidate:');
-                  if (i < 0) return true;
-                  return !isPublic(candAddr(line.slice(i + 'candidate:'.length)));
-                }).join('\r\n');
-              };
-              const wrapCb = (cb) => function (ev) {
-                try { if (ev && ev.candidate && candBlocked(ev.candidate)) return undefined; } catch (e) {}
-                return cb.apply(this, arguments);
-              };
-              // 1) onicecandidate accessor (own accessor on the prototype): wrap
-              //    the page's handler so srflx/public candidates are dropped.
-              try {
-                const od = Object.getOwnPropertyDescriptor(proto, 'onicecandidate');
-                if (od && typeof od.set === 'function') {
-                  const getter = function () { return od.get ? od.get.call(this) : null; };
-                  const setter = function (cb) {
-                    return od.set.call(this, typeof cb === 'function' ? wrapCb(cb) : cb);
-                  };
-                  __nrMask(getter, 'onicecandidate');
-                  __nrMask(setter, 'onicecandidate');
-                  Object.defineProperty(proto, 'onicecandidate', {
-                    configurable: true, enumerable: od.enumerable, get: getter, set: setter,
-                  });
-                }
-              } catch (e) {}
-              // 2) localDescription family: scrub candidate lines from any SDP a
-              //    page reads back after gathering.
-              ['localDescription', 'currentLocalDescription', 'pendingLocalDescription'].forEach((prop) => {
-                try {
-                  const d = Object.getOwnPropertyDescriptor(proto, prop);
-                  if (d && typeof d.get === 'function') {
-                    const getter = function () {
-                      const desc = d.get.call(this);
-                      if (!desc || !desc.sdp) return desc;
-                      try { return new RTCSessionDescription({ type: desc.type, sdp: scrubSdp(desc.sdp) }); }
-                      catch (e) { return desc; }
-                    };
-                    __nrMask(getter, prop);
-                    Object.defineProperty(proto, prop, {
-                      configurable: true, enumerable: d.enumerable, get: getter,
-                    });
-                  }
-                } catch (e) {}
-              });
-              // 3) createOffer/createAnswer (own methods): scrub the promise's SDP
-              //    so non-trickle offers carry no public candidate.
-              ['createOffer', 'createAnswer'].forEach((m) => {
-                try {
-                  const orig = proto[m];
-                  if (typeof orig !== 'function') return;
-                  const wrapped = function () {
-                    const r = orig.apply(this, arguments);
-                    if (r && typeof r.then === 'function') {
-                      return r.then((desc) => {
-                        try { if (desc && desc.sdp) return { type: desc.type, sdp: scrubSdp(desc.sdp) }; }
-                        catch (e) {}
-                        return desc;
-                      });
-                    }
-                    return r;
-                  };
-                  __nrMask(wrapped, m);
-                  proto[m] = wrapped;
-                } catch (e) {}
-              });
-              try { Object.defineProperty(proto, '__nrRtcGuard', { value: true }); } catch (e) {}
-            })();
-            """
-        )
-
-    async def _apply_headless_user_agent(self) -> None:
-        """Strip ``HeadlessChrome`` while keeping main-thread UA-CH populated.
-
-        Headless Chrome leaks the automation in ``navigator.userAgent`` (it
-        carries ``HeadlessChrome``), which DAB/sannysoft flag. Stripping it with a
-        CDP user-agent override is the fix -- but a UA-only override (no
-        ``userAgentMetadata``) BLANKS ``navigator.userAgentData`` (empty brands +
-        platform), and an empty brand list is itself a tell since a real Chrome
-        always exposes one. The earlier code hit exactly that trap whenever the
-        live high-entropy hints were unreadable (``getHighEntropyValues`` rejects
-        on ``about:blank`` right after launch), shipping a clean UA with blank
-        UA-CH.
-
-        So we ALWAYS push the override WITH metadata: ``_build_ua_metadata``
-        synthesizes the brand list and infers the host fields from the UA when
-        the live hints are blank. The UA string itself is only rewritten when the
-        legacy token is present.
-
-        SCOPE: this covers the MAIN thread only -- the surface virtually all
-        detectors read. The override does NOT propagate to worker scopes, so a
-        Worker/ServiceWorker still exposes the raw ``HeadlessChrome`` UA and the
-        host's real high-entropy hints. Tools that cross-check window-vs-worker
-        navigator (e.g. CreepJS) therefore still see one inconsistency. Closing
-        that is a deliberate non-goal here: worker-scope UA spoofing needs CDP
-        target auto-attach and is a fragile depth layer most sites never probe.
-        """
-        try:
-            current_ua = await self.tab.evaluate("navigator.userAgent")
-        except Exception as exc:
-            logger.warning("Could not read headless user-agent: %s", exc)
-            return
-        if not isinstance(current_ua, str) or not current_ua:
-            return
-        clean_ua = current_ua.replace("HeadlessChrome", "Chrome")
-        ua_changed = clean_ua != current_ua
-
-        # Build metadata even when the live hints are unreadable. Right after
-        # launch ``navigator.userAgentData.getHighEntropyValues`` can reject (UA-CH
-        # not ready yet) and ``_read_client_hints`` returns None; passing ``{}``
-        # lets ``_build_ua_metadata`` synthesize the brand list and infer the host
-        # fields purely from the UA string. Critically, headless leaves UA-CH
-        # blank regardless, so we must NEVER fall back to a UA-only override --
-        # that BLANKS ``navigator.userAgentData.brands`` (the very tell we fix).
-        metadata = None
-        hints = await self._read_client_hints()
-        try:
-            metadata = self._build_ua_metadata(hints or {}, ua_string=clean_ua)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Could not build client-hints metadata: %s", exc)
-
-        if metadata is None:
-            # Only reachable if metadata synthesis itself failed; at that point a
-            # UA-only override would blank UA-CH, so apply it solely to strip a
-            # legacy headless token and otherwise leave UA-CH untouched.
-            if not ua_changed:
-                return
-            try:
-                await self.tab.send(
-                    self._cdp_network.set_user_agent_override(user_agent=clean_ua)
-                )
-            except Exception as exc:
-                logger.warning("Could not override headless user-agent: %s", exc)
-            return
-
-        try:
-            await self.tab.send(
-                self._cdp_network.set_user_agent_override(
-                    user_agent=clean_ua, user_agent_metadata=metadata
-                )
-            )
-        except Exception as exc:
-            logger.warning("Could not override headless user-agent: %s", exc)
-            return
-
-        if ua_changed:
-            try:
-                await self.add_script_on_new_document(
-                    "Object.defineProperty(navigator, 'userAgent', "
-                    f"{{get: () => {json.dumps(clean_ua)}, configurable: true}});"
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Could not inject UA new-document script: %s", exc)
-        logger.info(
-            "Applied headless UA-CH metadata (brands populated; UA %s).",
-            "rewritten" if ua_changed else "unchanged",
-        )
-
-    async def _read_client_hints(self) -> dict[str, Any] | None:
-        """Read the browser's own high-entropy User-Agent Client Hints."""
-        script = """
-        (async () => {
-          const uad = navigator.userAgentData;
-          if (!uad) return null;
-          let high = {};
-          try {
-            high = await uad.getHighEntropyValues([
-              "platform", "platformVersion", "architecture",
-              "bitness", "model", "fullVersionList"
-            ]);
-          } catch (e) {}
-          return {
-            brands: (uad.brands || []).map(b => ({brand: b.brand, version: b.version})),
-            mobile: !!uad.mobile,
-            platform: high.platform || uad.platform || "",
-            platformVersion: high.platformVersion || "",
-            architecture: high.architecture || "",
-            bitness: high.bitness || "",
-            model: high.model || "",
-            fullVersionList: (high.fullVersionList || []).map(b => ({brand: b.brand, version: b.version})),
-          };
-        })()
-        """
-        try:
-            data = await self.tab.evaluate(script, await_promise=True, return_by_value=True)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Could not read client hints: %s", exc)
-            return None
-        return data if isinstance(data, dict) else None
-
-    @staticmethod
-    def _chrome_versions(ua_string: str | None) -> tuple[str, str] | None:
-        """Extract ``(major, full)`` Chrome version from a UA string, if present."""
-        if not ua_string:
-            return None
-        match = re.search(r"Chrome/(\d+)(?:\.[\d.]+)?", ua_string)
-        if not match:
-            return None
-        full_match = re.search(r"Chrome/([\d.]+)", ua_string)
-        full = full_match.group(1) if full_match else f"{match.group(1)}.0.0.0"
-        return match.group(1), full
-
-    @staticmethod
-    def _infer_platform_hints(ua_string: str | None) -> tuple[str, str, str, str]:
-        """Infer ``(platform, platformVersion, architecture, bitness)`` from a UA.
-
-        Used only when the live browser's real high-entropy hints are
-        unreadable (e.g. a custom UA set at launch while on ``about:blank``).
-        Getting ``platform`` right is what keeps ``Sec-CH-UA-Platform`` consistent
-        with ``navigator.userAgent``; the higher-entropy fields are best-effort.
-        """
-        ua = ua_string or ""
-        if "Windows" in ua:
-            return ("Windows", "15.0.0", "x86", "64")
-        if "Macintosh" in ua or "Mac OS X" in ua:
-            return ("macOS", "15.0.0", "x86" if "Intel" in ua else "arm", "64")
-        if "Android" in ua:
-            match = re.search(r"Android (\d+)", ua)
-            return ("Android", f"{match.group(1)}.0.0" if match else "14.0.0", "arm", "64")
-        if "CrOS" in ua:
-            return ("Chrome OS", "", "x86", "64")
-        if "Linux" in ua or "X11" in ua:
-            return ("Linux", "", "x86", "64")
-        return ("", "", "", "")
-
-    def _synthesize_brands(self, major: str, full: str) -> tuple[list[Any], list[Any]]:
-        """Build a plausible Chromium brand set when real hints are unavailable.
-
-        Reusing the live browser's own hints is always preferred (it carries the
-        exact, version-correct GREASE brand); this is only a last-resort fallback
-        so a custom UA never ships with empty ``userAgentData.brands``.
-        """
-        emu = self._cdp_emulation
-        grease = 'Not;A=Brand'
-        brands = [
-            emu.UserAgentBrandVersion(brand=grease, version="99"),
-            emu.UserAgentBrandVersion(brand="Chromium", version=major),
-            emu.UserAgentBrandVersion(brand="Google Chrome", version=major),
-        ]
-        full_list = [
-            emu.UserAgentBrandVersion(brand=grease, version="99.0.0.0"),
-            emu.UserAgentBrandVersion(brand="Chromium", version=full),
-            emu.UserAgentBrandVersion(brand="Google Chrome", version=full),
-        ]
-        return brands, full_list
-
-    def _build_ua_metadata(
-        self,
-        hints: dict[str, Any],
-        *,
-        platform_override: str | None = None,
-        ua_string: str | None = None,
-    ) -> Any:
-        """Build a CDP ``UserAgentMetadata`` consistent with the active UA.
-
-        ``platform_override`` (e.g. ``"Windows"``) rewrites the UA-CH platform so
-        ``navigator.userAgentData.platform`` stays consistent with a spoofed
-        ``navigator.platform``. ``ua_string`` lets us re-version the Chromium /
-        Google Chrome brands to match a custom user-agent (so the low-entropy
-        brands and the full-version list agree with ``navigator.userAgent``).
-        """
-        emu = self._cdp_emulation
-        versions = self._chrome_versions(ua_string)
-
-        def _is_chromium(brand: str) -> bool:
-            low = brand.lower()
-            return "chrom" in low  # Chromium + Google Chrome, never the GREASE brand
-
-        def _brand_list(raw: Any, *, full: bool) -> list[Any]:
-            out: list[Any] = []
-            for item in raw or []:
-                brand = str(item.get("brand", "") or "")
-                if not brand:
-                    continue
-                brand = brand.replace("HeadlessChrome", "Google Chrome")
-                version = str(item.get("version", "") or "")
-                if versions and _is_chromium(brand):
-                    version = versions[1] if full else versions[0]
-                out.append(emu.UserAgentBrandVersion(brand=brand, version=version))
-            return out
-
-        brands = _brand_list(hints.get("brands"), full=False)
-        full_version_list = _brand_list(hints.get("fullVersionList"), full=True)
-        # Fall back to a synthesized set so a custom UA never blanks UA-CH.
-        if not brands and versions:
-            brands, full_version_list = self._synthesize_brands(versions[0], versions[1])
-        # Infer host fields when the live hints are unavailable (about:blank).
-        inferred = (
-            self._infer_platform_hints(ua_string) if not hints.get("platform") else None
-        )
-
-        def _field(key: str, idx: int) -> str:
-            real = str(hints.get(key, "") or "")
-            if real:
-                return real
-            return inferred[idx] if inferred else ""
-
-        platform_value = platform_override or _field("platform", 0)
-        return emu.UserAgentMetadata(
-            platform=platform_value,
-            platform_version=_field("platformVersion", 1),
-            architecture=_field("architecture", 2),
-            model=str(hints.get("model", "") or ""),
-            mobile=bool(hints.get("mobile", False)),
-            brands=brands or None,
-            full_version_list=full_version_list or None,
-            bitness=_field("bitness", 3),
-        )
+    @property
+    def timezone_id(self) -> str | None:
+        """The JS timezone the engine has pinned (None before launch / if unset)."""
+        stealth = getattr(self.browser, "stealth", None)
+        return getattr(stealth, "timezone_id", None) if stealth is not None else None
 
     async def apply_fingerprint(self, fp: FingerprintConfig) -> dict[str, Any]:
-        """Apply an identity to the live session, engine-level where possible.
-
-        Order and mechanism are chosen for *consistency*: CDP ``Emulation.*``
-        overrides (timezone, locale, UA/Accept-Language/platform, geolocation,
-        hardware concurrency, device metrics, touch) are applied inside Chromium
-        so they reach Web Workers and HTTP headers. Only ``deviceMemory`` and the
-        optional WebGL strings — which have no CDP override — are injected as
-        new-document JS (and eval'd once on the current document for immediate
-        effect).
-        """
-        if self.tab is None or self._cdp_emulation is None:
-            raise RuntimeError("Browser not started")
-        emu = self._cdp_emulation
-        applied: dict[str, Any] = {}
-
-        if fp.timezone_id:
-            try:
-                await self.tab.send(emu.set_timezone_override(timezone_id=fp.timezone_id))
-                self.timezone_id = fp.timezone_id
-                applied["timezone_id"] = fp.timezone_id
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("setTimezoneOverride(%s) failed: %s", fp.timezone_id, exc)
-
-        if fp.locale:
-            try:
-                await self.tab.send(emu.set_locale_override(locale=fp.locale))
-                applied["locale"] = fp.locale
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("setLocaleOverride(%s) failed: %s", fp.locale, exc)
-
-        # User-Agent / Accept-Language / platform share one CDP call. We only
-        # issue it when at least one of those is requested, and we always pass a
-        # user_agent (the current one if unchanged) because the param is required.
-        accept_language = fp.effective_accept_language
-        if fp.user_agent or fp.platform or accept_language:
-            try:
-                current_ua = await self.tab.evaluate("navigator.userAgent")
-            except Exception:  # noqa: BLE001
-                current_ua = None
-            ua_string = fp.user_agent or (current_ua if isinstance(current_ua, str) else None)
-            if ua_string:
-                metadata = None
-                if fp.user_agent or fp.platform:
-                    hints = await self._read_client_hints()
-                    try:
-                        # Build even when live hints are empty: a custom UA
-                        # falls back to a synthesized brand set so UA-CH is never
-                        # blanked (which is itself a strong bot signal).
-                        metadata = self._build_ua_metadata(
-                            hints or {},
-                            platform_override=fp.platform,
-                            ua_string=fp.user_agent,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug("UA metadata build failed: %s", exc)
-                kwargs: dict[str, Any] = {"user_agent": ua_string}
-                if accept_language:
-                    kwargs["accept_language"] = accept_language
-                if fp.platform:
-                    kwargs["platform"] = fp.platform
-                if metadata is not None:
-                    kwargs["user_agent_metadata"] = metadata
-                try:
-                    await self.tab.send(emu.set_user_agent_override(**kwargs))
-                    if accept_language:
-                        applied["accept_language"] = accept_language
-                    if fp.user_agent:
-                        applied["user_agent"] = ua_string
-                    if fp.platform:
-                        applied["platform"] = fp.platform
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("setUserAgentOverride failed: %s", exc)
-
-        if fp.latitude is not None and fp.longitude is not None:
-            try:
-                await self.tab.send(
-                    emu.set_geolocation_override(
-                        latitude=fp.latitude,
-                        longitude=fp.longitude,
-                        accuracy=fp.geo_accuracy if fp.geo_accuracy is not None else 50.0,
-                    )
-                )
-                # The override only supplies coordinates; the page still needs
-                # the geolocation permission or getCurrentPosition() times out.
-                # Granting it browser-wide mirrors a user who allowed location.
-                await self._grant_geolocation_permission()
-                applied["geolocation"] = {"latitude": fp.latitude, "longitude": fp.longitude}
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("setGeolocationOverride failed: %s", exc)
-
-        if fp.hardware_concurrency is not None:
-            try:
-                await self.tab.send(
-                    emu.set_hardware_concurrency_override(
-                        hardware_concurrency=int(fp.hardware_concurrency)
-                    )
-                )
-                applied["hardware_concurrency"] = int(fp.hardware_concurrency)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("setHardwareConcurrencyOverride failed: %s", exc)
-
-        if fp.has_device_metrics:
-            try:
-                await self.tab.send(
-                    emu.set_device_metrics_override(
-                        width=int(fp.screen_width),
-                        height=int(fp.screen_height),
-                        device_scale_factor=float(fp.device_scale_factor or 1.0),
-                        mobile=bool(fp.mobile),
-                        # Without screen_width/height, only the viewport
-                        # (innerWidth/innerHeight) changes while screen.width/
-                        # height keep the host values -> innerWidth can exceed
-                        # screen.width, an impossible, easily-flagged state.
-                        screen_width=int(fp.screen_width),
-                        screen_height=int(fp.screen_height),
-                    )
-                )
-                applied["device_metrics"] = {
-                    "width": int(fp.screen_width),
-                    "height": int(fp.screen_height),
-                    "device_scale_factor": float(fp.device_scale_factor or 1.0),
-                    "mobile": bool(fp.mobile),
-                }
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("setDeviceMetricsOverride failed: %s", exc)
-
-        if fp.max_touch_points is not None:
-            try:
-                await self.tab.send(
-                    emu.set_touch_emulation_enabled(
-                        enabled=int(fp.max_touch_points) > 0,
-                        max_touch_points=int(fp.max_touch_points) or 1,
-                    )
-                )
-                applied["max_touch_points"] = int(fp.max_touch_points)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("setTouchEmulationEnabled failed: %s", exc)
-
-        # JS-only overrides (no CDP equivalent): deviceMemory and WebGL strings.
-        document_js = self._fingerprint_document_js(fp)
-        if document_js:
-            try:
-                await self.add_script_on_new_document(document_js)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("fingerprint new-document script failed: %s", exc)
-            try:
-                await self.tab.evaluate(document_js)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("fingerprint immediate eval failed: %s", exc)
-            if fp.device_memory is not None:
-                applied["device_memory"] = fp.device_memory
-            if fp.webgl_vendor or fp.webgl_renderer:
-                applied["webgl"] = {
-                    "vendor": fp.webgl_vendor,
-                    "renderer": fp.webgl_renderer,
-                }
-
-        self.fingerprint = self.fingerprint.merged_with(fp)
-        logger.info("Applied fingerprint overrides: %s", sorted(applied))
-        return applied
-
-    async def _grant_geolocation_permission(self) -> None:
-        """Grant geolocation permission for the active tab's browser context.
-
-        Sent over the browser-level connection (Browser-domain command) and
-        scoped to the tab's ``browserContextId`` so the grant actually applies
-        to the context the page lives in — otherwise the page keeps prompting.
-        """
-        if self.browser is None or self._cdp_browser is None:
-            return
-        connection = getattr(self.browser, "connection", None)
-        if connection is None:
-            return
-        context_id = None
-        target = getattr(self.tab, "target", None)
-        if target is not None:
-            context_id = getattr(target, "browser_context_id", None)
-        try:
-            await connection.send(
-                self._cdp_browser.grant_permissions(
-                    permissions=[self._cdp_browser.PermissionType.GEOLOCATION],
-                    browser_context_id=context_id,
-                )
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("grantPermissions(geolocation) failed: %s", exc)
-
-    def _worker_bootstrap_js(self, fp: FingerprintConfig) -> str:
-        """JS run *inside* each worker to re-assert JS-only navigator props.
-
-        CDP timezone/locale/hardwareConcurrency overrides already reach workers,
-        but navigator.language(s) (ignored by --lang on macOS) and
-        navigator.deviceMemory (no CDP override at all) do not, so a worker would
-        otherwise read host values and trip a main-vs-worker mismatch.
-        """
-        lines: list[str] = []
-        if fp.languages:
-            lines.append(
-                "Object.defineProperty(p,'languages',{get:function(){return %s;},configurable:true});"
-                % json.dumps(fp.languages)
-            )
-            lines.append(
-                "Object.defineProperty(p,'language',{get:function(){return %s;},configurable:true});"
-                % json.dumps(fp.primary_language or fp.languages[0])
-            )
-        if fp.device_memory is not None:
-            lines.append(
-                "Object.defineProperty(p,'deviceMemory',{get:function(){return %s;},configurable:true});"
-                % json.dumps(fp.device_memory)
-            )
-        # hardwareConcurrency: CDP setHardwareConcurrencyOverride covers the main
-        # thread but NOT workers, so re-assert it here for worker consistency.
-        if fp.hardware_concurrency is not None:
-            lines.append(
-                "Object.defineProperty(p,'hardwareConcurrency',{get:function(){return %s;},configurable:true});"
-                % json.dumps(int(fp.hardware_concurrency))
-            )
-        nav_block = (
-            "try{var p=Object.getPrototypeOf(navigator);" + "".join(lines) + "}catch(e){}"
-            if lines
-            else ""
-        )
-        # OffscreenCanvas WebGL lives in the worker too; without the same
-        # getParameter patch a worker reports the real GPU while the main thread
-        # reports the spoofed one -> CreepJS flags the mismatch. The WebGL patch
-        # depends on __nrMask, so pull in the native-toString shim here as well.
-        webgl_block = self._webgl_patch_js(fp)
-        parts: list[str] = []
-        if webgl_block:
-            parts.append(self._NATIVE_MASK_PREAMBLE)
-        if nav_block:
-            parts.append(nav_block)
-        if webgl_block:
-            parts.append(webgl_block)
-        return "".join(parts)
-
-    def _webgl_patch_js(self, fp: FingerprintConfig) -> str:
-        """getParameter override for UNMASKED vendor/renderer (assumes __nrMask).
-
-        Uses ``self.*`` so the same source works in a document and in a worker
-        (OffscreenCanvas) global scope.
-        """
-        if not (fp.webgl_vendor or fp.webgl_renderer):
-            return ""
-        vendor = json.dumps(fp.webgl_vendor or "")
-        renderer = json.dumps(fp.webgl_renderer or "")
-        return (
-            """
-            try {
-              const V = %s, R = %s;
-              const patch = (proto) => {
-                if (!proto || !proto.getParameter) return;
-                const orig = proto.getParameter;
-                const wrapped = function getParameter(p) {
-                  if (V && p === 37445) return V;   // UNMASKED_VENDOR_WEBGL
-                  if (R && p === 37446) return R;   // UNMASKED_RENDERER_WEBGL
-                  return orig.apply(this, arguments);
-                };
-                __nrMask(wrapped, "getParameter");
-                proto.getParameter = wrapped;
-              };
-              patch(self.WebGLRenderingContext && self.WebGLRenderingContext.prototype);
-              patch(self.WebGL2RenderingContext && self.WebGL2RenderingContext.prototype);
-            } catch (e) {}
-            """
-            % (vendor, renderer)
-        )
-
-    # Shared preamble: makes any function we patch report
-    # `function <name>() { [native code] }` via a LOCAL own-`toString` per fn.
-    #
-    # History: this used to install a GLOBAL `Function.prototype.toString` shim
-    # (backed by a WeakMap) so even `Function.prototype.toString.call(fn)` read
-    # native. That defeats the strongest probe, BUT globally reassigning
-    # `Function.prototype.toString` is ITSELF a strong CreepJS tell -- it
-    # cascaded into ~9 component "lies" (Timezone/WebGL/Canvas/Audio/Math/...),
-    # taking a spoofed session from 1 lie to 10 (measured). A local own-toString
-    # leaves the global pristine: `fn.toString()` / `fn + ''` read native (the
-    # common checks) while only the rarer `Function.prototype.toString.call(fn)`
-    # of a specific patched member can still reveal it -- an accepted depth-layer
-    # gap, far cheaper than tripping 9 lies. Call sites are unchanged
-    # (`__nrMask(fn, name)`).
-    _NATIVE_MASK_PREAMBLE = """
-        const __nrMask = (fn, name) => {
-          try {
-            const ts = function toString() { return "function " + name + "() { [native code] }"; };
-            Object.defineProperty(fn, "toString", { value: ts, configurable: true, writable: true });
-          } catch (e) {}
-          return fn;
-        };
-    """
-
-    def _fingerprint_document_js(self, fp: FingerprintConfig) -> str | None:
-        """Build the JS for properties Chromium has no CDP override for."""
-        blocks: list[str] = []
-        worker_boot = self._worker_bootstrap_js(fp)
-        wants_webgl = bool(fp.webgl_vendor or fp.webgl_renderer)
-        # The native-toString mask must be defined before any patched function.
-        if worker_boot or wants_webgl:
-            blocks.append(self._NATIVE_MASK_PREAMBLE)
-        # Wrap the classic Worker constructor so every worker first re-asserts
-        # the JS-only navigator props (language(s), deviceMemory) before running
-        # its real script (loaded transparently via importScripts).
-        if worker_boot:
-            blocks.append(
-                """
-                try {
-                  const BOOT = %s;
-                  const NativeWorker = self.Worker;
-                  if (NativeWorker && !NativeWorker.__nrPatched) {
-                    const Wrapped = function Worker(url, options) {
-                      try {
-                        if (!options || options.type !== 'module') {
-                          const abs = new URL(url, self.location.href).href;
-                          const src = BOOT + ";importScripts(" + JSON.stringify(abs) + ");";
-                          const burl = URL.createObjectURL(
-                            new Blob([src], { type: 'text/javascript' })
-                          );
-                          return new NativeWorker(burl, options);
-                        }
-                      } catch (e) {}
-                      return new NativeWorker(url, options);
-                    };
-                    Wrapped.prototype = NativeWorker.prototype;
-                    Wrapped.__nrPatched = true;
-                    __nrMask(Wrapped, "Worker");
-                    self.Worker = Wrapped;
-                  }
-                } catch (e) {}
-                """
-                % json.dumps(worker_boot)
-            )
-        if fp.device_memory is not None:
-            blocks.append(
-                "try{Object.defineProperty(navigator,'deviceMemory',"
-                f"{{get:()=>{json.dumps(fp.device_memory)},configurable:true}});}}catch(e){{}}"
-            )
-        if wants_webgl:
-            blocks.append(self._webgl_patch_js(fp))
-        if not blocks:
-            return None
-        return "(()=>{" + "".join(blocks) + "})();"
+        """Apply an identity to the live session via the engine controller."""
+        return await self._stealth().apply_fingerprint(fp)
 
     async def apply_timezone_override(self, timezone_id: str) -> None:
-        """Pin the JS timezone via CDP ``Emulation.setTimezoneOverride``."""
-        if not timezone_id or self.tab is None or self._cdp_emulation is None:
-            return
-        try:
-            await self.tab.send(self._cdp_emulation.set_timezone_override(timezone_id=timezone_id))
-            self.timezone_id = timezone_id
-            logger.info("Applied timezone override: %s", timezone_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not set timezone override (%s): %s", timezone_id, exc)
+        """Pin the JS timezone via the engine stealth controller."""
+        await self._stealth().apply_timezone_override(timezone_id)
 
     async def align_timezone_to_proxy(
         self,
@@ -1335,8 +566,7 @@ class BridgeBrowser:
         return info
 
     async def add_script_on_new_document(self, source: str) -> None:
-        await self._ensure_page_domain()
-        await self.tab.send(self._cdp_page.add_script_to_evaluate_on_new_document(source=source))
+        await self._stealth().add_script_on_new_document(source)
 
     async def goto(self, url: str, *, wait_seconds: float = 0.0) -> None:
         await self._ensure_proxy_auth_handler()
