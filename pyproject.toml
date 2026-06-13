@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "codeisalifestyle" }]
 dependencies = [
   "mcp>=1.26.0,<2",
-  "mithwire>=0.50,<0.60",
+  "mithwire>=0.50.5,<0.60",
   "opencv-python>=4.8,<5",
 ]
 
