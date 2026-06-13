@@ -5,6 +5,13 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.2.1](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.2.0...v0.2.1) (2026-06-13)
+
+
+### Features
+
+* consume engine-owned anti-detect stealth ([#7](https://github.com/codeisalifestyle/mithwire-mcp/issues/7)) ([a04b6b3](https://github.com/codeisalifestyle/mithwire-mcp/commit/a04b6b3f4ef8b58df98a0d90bfdb33a31d949687))
+
 ## [0.2.0](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.1.0...v0.2.0) (2026-06-13)
 
 
