@@ -51,6 +51,17 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 # ---------------------------------------------------------------------------
 # Probes (identical JS for every driver, so results are directly comparable).
+#
+# PROVENANCE: the engine now ships a shared copy of these probes at
+# ``mithwire.stealth_diagnostic.probes`` (powering ``mithwire
+# stealth-diagnostic``), ported from this file. They are intentionally NOT
+# imported here yet: this repo pins mithwire from PyPI (>=0.50.5), and
+# ``mithwire.stealth_diagnostic`` only lands in a later engine release. Once the
+# MCP pin is bumped to an engine build that includes it, replace the
+# definitions below with imports from ``mithwire.stealth_diagnostic.probes``
+# (the engine copy is the canonical superset) so the JS can never drift between
+# the two. Until then, keep edits in sync by hand and treat the engine module
+# as the upstream.
 # ---------------------------------------------------------------------------
 
 NAV_PROBE = r"""
