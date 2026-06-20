@@ -50,307 +50,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 # ---------------------------------------------------------------------------
-# Probes (identical JS for every driver, so results are directly comparable).
+# Probes: imported from the engine. ``mithwire.stealth_diagnostic.probes`` is
+# the single source of truth (the canonical superset), so the JS can never
+# drift between the engine's ``mithwire stealth-diagnostic`` and this harness.
+# Only the fingerprint.com probe (FP_CAPTURE / FP_DOM_PROBE below) stays local:
+# it targets a commercial demo and is MCP-only.
 #
-# PROVENANCE: the engine now ships a shared copy of these probes at
-# ``mithwire.stealth_diagnostic.probes`` (powering ``mithwire
-# stealth-diagnostic``), ported from this file. They are intentionally NOT
-# imported here yet: this repo pins mithwire from PyPI (>=0.50.5), and
-# ``mithwire.stealth_diagnostic`` only lands in a later engine release. Once the
-# MCP pin is bumped to an engine build that includes it, replace the
-# definitions below with imports from ``mithwire.stealth_diagnostic.probes``
-# (the engine copy is the canonical superset) so the JS can never drift between
-# the two. Until then, keep edits in sync by hand and treat the engine module
-# as the upstream.
+# Requires mithwire >= 0.50.6 (the release that introduced stealth_diagnostic).
 # ---------------------------------------------------------------------------
-
-NAV_PROBE = r"""
-(() => {
-  const r = {};
-  const safe = (f, d=null) => { try { return f(); } catch(e) { return d; } };
-  r.userAgent = safe(() => navigator.userAgent);
-  r.webdriverType = typeof navigator.webdriver;
-  r.webdriverValue = safe(() => String(navigator.webdriver));
-  r.language = safe(() => navigator.language);
-  r.languages = safe(() => navigator.languages);
-  r.platform = safe(() => navigator.platform);
-  r.vendor = safe(() => navigator.vendor);
-  r.hardwareConcurrency = safe(() => navigator.hardwareConcurrency);
-  r.deviceMemory = safe(() => navigator.deviceMemory);
-  r.maxTouchPoints = safe(() => navigator.maxTouchPoints);
-  r.timezone = safe(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
-  r.screen = safe(() => ({ w: screen.width, h: screen.height, availW: screen.availWidth, availH: screen.availHeight, depth: screen.colorDepth }));
-  r.inner = safe(() => ({ w: innerWidth, h: innerHeight }));
-  r.dpr = safe(() => devicePixelRatio);
-  r.hasChrome = safe(() => !!window.chrome);
-  r.hasChromeRuntime = safe(() => !!(window.chrome && window.chrome.runtime));
-  r.uaData = safe(() => navigator.userAgentData ? {
-    mobile: navigator.userAgentData.mobile,
-    platform: navigator.userAgentData.platform,
-    brands: (navigator.userAgentData.brands || []).map(b => b.brand + ' ' + b.version)
-  } : null);
-  r.webgl = safe(() => {
-    const c = document.createElement('canvas');
-    const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
-    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
-    return { vendor: gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL), renderer: gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) };
-  }, { err: true });
-  r.nativeToString = safe(() => ({
-    getParameter: ('' + WebGLRenderingContext.prototype.getParameter).includes('[native code]'),
-    permissionsQuery: ('' + navigator.permissions.query).includes('[native code]'),
-    fnToString: ('' + Function.prototype.toString).includes('[native code]')
-  }));
-  return r;
-})()
-"""
-
-# deviceandbrowserinfo computes its verdict SERVER-SIDE: the page POSTs a large
-# fingerprint to /fingerprint_bot_test and renders the returned JSON into a
-# <pre><code class="language-json"> block (Prism-highlighted, but textContent
-# is clean parseable JSON). Anchor on that element -- far safer than grabbing
-# "the first {...} in the body". Self-poll until it parses.
-# Window: ~600ms direct, but >10s through a mobile proxy (measured the body
-# only starts rendering 4-12s after navigation finishes when bandwidth is
-# constrained). 25s covers a slow mobile cell with margin.
-DAB_PROBE = r"""
-(async () => {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const read = () => {
-    const el = document.querySelector('code.language-json')
-      || document.querySelector('pre code');
-    if (el && el.textContent && el.textContent.trim().charAt(0) === '{') {
-      try { return JSON.parse(el.textContent); } catch (e) { return null; }
-    }
-    return null;
-  };
-  const deadline = Date.now() + 25000;
-  let v = read();
-  while (!v && Date.now() < deadline) { await sleep(250); v = read(); }
-  if (!v) {
-    const m = (document.body.innerText || '').match(/\{[\s\S]*\}/);
-    if (m) { try { v = JSON.parse(m[0]); } catch (e) {} }
-  }
-  if (!v) return { ready: false, error: 'no-verdict' };
-  return { ready: true, isBot: v.isBot, details: v.details || {} };
-})()
-"""
-
-# sannysoft's real verdicts are the cells with class `result` (8 of them), each
-# with a stable id (webdriver-result, chrome-result, ...). Classify by the
-# pass/fail/warn token in the class. NOTE: plain `.passed` cells are the fp2
-# *data* rows (always styled green) -- counting those inflates "passed" and is
-# meaningless, so we key strictly off `td.result`. A couple of cells resolve
-# from promises, so poll until none are still 'unknown'.
-# Window: 6s direct, but ~12s through a mobile proxy (the test scripts pull
-# fp2 first, then start the 8 result-cell tests in sequence — the last cells
-# don't settle until ~8-10s on a constrained link).
-SANNY_PROBE = r"""
-(async () => {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const verdict = (cls) => /failed/.test(cls) ? 'failed'
-    : /warn/.test(cls) ? 'warn' : /passed/.test(cls) ? 'passed' : 'unknown';
-  const name = (td) => {
-    const tr = td.closest('tr');
-    return tr && tr.cells[0]
-      ? tr.cells[0].innerText.replace(/\s+/g, ' ').trim()
-      : (td.id || '');
-  };
-  const collect = () => [...document.querySelectorAll('td.result')].map((td) => ({
-    id: td.id, name: name(td), verdict: verdict(td.className),
-    value: (td.innerText || '').trim(),
-  }));
-  // Readiness: the page's HTML hard-codes `class="failed result"` on EVERY
-  // result cell at parse time -- so polling on `verdict === 'unknown'`
-  // false-passes the moment the DOM is parsed. Each test then runs async
-  // (e.g. `permissions-result` awaits navigator.permissions.query()),
-  // writes a value into innerText, and ONLY THEN swaps `failed` -> `passed`
-  // on success. Visually this shows as "red, then turns green within ~1 s"
-  // -- and we used to sample the red state before the swap, reporting
-  // `permissions-result` as failed in clean headful Chrome where it
-  // actually passes.
-  //
-  // The robust readiness signal is therefore content + stability:
-  //   1. Every result cell has non-empty innerText (the test wrote its
-  //      result; the empty initial state is gone), AND
-  //   2. The (id, verdict) signature has not changed for one extra poll
-  //      cycle (no in-flight red->green transitions remain).
-  // We keep a 12 s wall-clock cap so a wedged page never blocks the run.
-  const allFilled = (rows) =>
-    rows.length > 0 && rows.every((r) => r.value.length > 0);
-  const signature = (rows) =>
-    rows.map((r) => r.id + ':' + r.verdict).join(',');
-  const deadline = Date.now() + 12000;
-  let rows = collect();
-  let lastSig = '';
-  let stableSince = -1;
-  while (Date.now() < deadline) {
-    if (allFilled(rows)) {
-      const sig = signature(rows);
-      if (sig === lastSig) {
-        if (stableSince < 0) stableSince = Date.now();
-        if (Date.now() - stableSince >= 400) break;
-      } else {
-        lastSig = sig;
-        stableSince = -1;
-      }
-    }
-    await sleep(200);
-    rows = collect();
-  }
-  return {
-    total: rows.length,
-    passed: rows.filter((r) => r.verdict === 'passed').length,
-    failed: rows.filter((r) => r.verdict === 'failed').map((r) => r.id || r.name),
-    warn: rows.filter((r) => r.verdict === 'warn').map((r) => r.id || r.name),
-    // Truncate per-row value for the JSON payload; full text is not needed
-    // for the verdict and would balloon the result file.
-    rows: rows.map((r) => ({ ...r, value: r.value.slice(0, 40) })),
-  };
-})()
-"""
-
-# CreepJS renders progressively and has NO plain-text trust score in this build
-# (the `grade-*` span is the Worker section's "confidence", not a global score).
-# Stable signals: the `.lies` count + categories (spoofing inconsistencies it
-# caught), the WebRTC leak IP, and the FP/fuzzy hashes. Gate readiness on the
-# fuzzy hash being populated rather than a blind sleep.
-CREEP_PROBE = r"""
-(async () => {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const safe = (f, d=null) => { try { return f(); } catch (e) { return d; } };
-  const fuzzyHex = () => safe(() => {
-    const e = document.querySelector('.fuzzy-fp');
-    // Drop the "Fuzzy:" label first (its 'F' is a hex char and would leak in).
-    return e ? (e.innerText || '').replace(/fuzzy:?/i, '').replace(/[^0-9a-f]/gi, '') : '';
-  }, '') || '';
-  // The .fuzzy-fp element renders with a placeholder of 16 zeros BEFORE CreepJS
-  // finishes computing — gating on length alone false-passes on that placeholder
-  // (saw fpId=null, fuzzy='0000000000000000' through a slow proxy). Wait until
-  // the hash has at least one non-zero hex char, so we only "see" the real value.
-  const fuzzyReady = () => {
-    const h = fuzzyHex();
-    return h.length >= 16 && /[1-9a-f]/.test(h);
-  };
-  const deadline = Date.now() + 24000;
-  while (Date.now() < deadline && !fuzzyReady()) { await sleep(300); }
-  const txt = safe(() => document.body.innerText, '') || '';
-  const lies = safe(() => [...document.querySelectorAll('.lies')], []) || [];
-  const categories = lies.map((e) => {
-    const row = e.closest('div');
-    return (row ? (row.innerText || '') : (e.textContent || ''))
-      .replace(/\s+/g, ' ').trim().slice(0, 40);
-  });
-  // Scope the IPv4 to the WebRTC block's "ip:" label (the body has other
-  // numeric "ip"-like fields in audio/network sections that a bare dotted-quad
-  // match would wrongly grab).
-  const webrtcIp = safe(() => {
-    const blocks = [...document.querySelectorAll('.block-text')]
-      .filter((e) => /ip:/i.test(e.innerText || ''));
-    for (const b of blocks) {
-      const m = (b.innerText || '').match(/ip:\s*((?:\d{1,3}\.){3}\d{1,3})/i);
-      if (m) return m[1];
-    }
-    return null;
-  });
-  const fpId = safe(() => {
-    const m = txt.match(/FP ID:\s*([0-9a-f]{16,})/i); return m ? m[1] : null;
-  });
-  return {
-    ready: fuzzyReady(),
-    lieNodes: lies.length,
-    lieCategories: categories,
-    webrtcLeakIp: webrtcIp,
-    fpId: fpId,
-    fuzzyHash: fuzzyHex().slice(0, 16) || null,
-    // NOTE: do NOT test the body for the word "headless" -- CreepJS prints it
-    // in its own section labels, so it is true even in a headful browser. Use
-    // .lies categories (a Navigator lie appears when headless empties UA-CH).
-    bodyLen: txt.length,
-  };
-})()
-"""
-
-# IP / geo ground truth (reflects the proxy exit when one is set). The body is
-# raw JSON; parse it directly. Flags: is_proxy / is_vpn / is_datacenter / is_tor
-# / is_abuser / is_crawler / is_mobile; plus location.{country,timezone}.
-IPAPI_PROBE = r"""
-(() => {
-  const safe = (f, d=null) => { try { return f(); } catch (e) { return d; } };
-  const raw = safe(() => document.body.innerText, '') || '';
-  let j = null;
-  try { j = JSON.parse(raw); } catch (e) { return { ready: false, error: String(e) }; }
-  const loc = j.location || {};
-  return {
-    ready: true,
-    ip: j.ip,
-    country: loc.country,
-    timezone: loc.timezone,
-    is_proxy: j.is_proxy, is_vpn: j.is_vpn, is_datacenter: j.is_datacenter,
-    is_tor: j.is_tor, is_abuser: j.is_abuser, is_crawler: j.is_crawler,
-    is_mobile: j.is_mobile,
-    asn: (j.asn || {}).descr || (j.asn || {}).org || null,
-    company: (j.company || {}).name || null,
-  };
-})()
-"""
-
-# Deterministic WebRTC leak probe. CreepJS's webrtcLeakIp reads whatever ICE has
-# gathered *so far*, which races our snapshot. Here we drive our OWN
-# RTCPeerConnection against a public STUN server and WAIT for ICE gathering to
-# actually complete (or a hard 9s cap) before reporting every candidate address
-# + type. Behind a proxy with disable_non_proxied_udp, STUN (UDP to the public
-# internet) should be blocked, so NO srflx/public candidate should ever appear —
-# only an mDNS `.local` host candidate. A public IP that is not the proxy egress
-# is a real-IP leak. Runs in a secure https context (evaluated on api.ipapi.is).
-WEBRTC_PROBE = r"""
-(async () => {
-  if (typeof RTCPeerConnection === 'undefined') return { ready: false, error: 'no-rtc' };
-  const cands = [];
-  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-  try {
-    pc.createDataChannel('probe');
-    await pc.setLocalDescription(await pc.createOffer());
-  } catch (e) {
-    try { pc.close(); } catch (_) {}
-    return { ready: false, error: 'offer-failed:' + String(e) };
-  }
-  let complete = false;
-  await new Promise((resolve) => {
-    const done = () => resolve();
-    pc.onicegatheringstatechange = () => {
-      if (pc.iceGatheringState === 'complete') { complete = true; done(); }
-    };
-    pc.onicecandidate = (e) => {
-      if (!e.candidate) { complete = true; done(); return; }
-      const c = e.candidate.candidate || '';
-      const parts = c.split(' ');
-      const addr = parts[4] || '';
-      const typ = (c.match(/ typ (\S+)/) || [])[1] || '';
-      cands.push({ addr, typ });
-    };
-    setTimeout(done, 9000);
-  });
-  try { pc.close(); } catch (_) {}
-  return { ready: true, gatheringComplete: complete, candidates: cands };
-})()
-"""
-
-SITES = [
-    # (key, url, nav_wait_s, probe_js, probe_timeout_s)
-    # Self-polling probes gate on readiness internally, so nav_wait only needs
-    # to cover navigation start; the probe deadline (and probe_timeout below)
-    # does the real waiting. probe_timeout MUST be > the in-JS deadline by a
-    # safety margin so a timely-but-late page isn't cut off by the outer
-    # `_guard` wrapper. Sized for slow mobile-proxy cells (12-20s rendering).
-    ("deviceandbrowserinfo", "https://deviceandbrowserinfo.com/are_you_a_bot",
-     2.0, DAB_PROBE, 32.0),
-    ("sannysoft", "https://bot.sannysoft.com/",
-     1.5, SANNY_PROBE, 18.0),
-    ("creepjs", "https://abrahamjuliot.github.io/creepjs/",
-     2.0, CREEP_PROBE, 32.0),
-    ("ipapi", "https://api.ipapi.is/",
-     1.5, IPAPI_PROBE, 12.0),
-]
+from mithwire.stealth_diagnostic.probes import (  # noqa: E402
+    NAV_PROBE,
+    DEVICEANDBROWSER_PROBE as DAB_PROBE,
+    SANNYSOFT_PROBE as SANNY_PROBE,
+    CREEPJS_PROBE as CREEP_PROBE,
+    IPAPI_PROBE,
+    WEBRTC_PROBE,
+    SITES,
+    wrap as _wrap,
+    parse as _parse,
+)
 
 # fingerprint.com (Fingerprint Pro) computes its verdict server-side and POSTs it
 # to /api/event/v4/<id>. Originally we captured that response PASSIVELY via CDP
@@ -885,28 +603,9 @@ async def _guard(name: str, coro, timeout: float) -> Any:
         return {"__error__": f"{type(exc).__name__}: {exc}"}
 
 
-def _wrap(expr: str) -> str:
-    """Force the probe to return a JSON string.
-
-    mithwire's ``evaluate(return_by_value=True)`` hands back a RemoteObject for
-    nested objects, whereas raw CDP returns the plain value. Returning a string
-    from the page serializes identically across both drivers; we ``json.loads``
-    it in Python for a uniform shape.
-
-    ``Promise.resolve(...)`` lets a probe be either a synchronous IIFE *or* an
-    ``async`` IIFE that polls the page for readiness before resolving -- both
-    drivers evaluate with ``awaitPromise`` so the resolved string comes back.
-    """
-    return f"Promise.resolve(({expr})).then((v) => JSON.stringify(v))"
-
-
-def _parse(value: Any) -> Any:
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except Exception:  # noqa: BLE001
-            return {"__unparsed__": value[:500]}
-    return value
+# _wrap / _parse are imported from mithwire.stealth_diagnostic.probes (as wrap /
+# parse) alongside the probe JS, so the serialize-in-page + json.loads contract
+# stays identical across the engine self-test and this harness.
 
 
 async def _await_json_response(
@@ -1062,9 +761,11 @@ def _flatten(result: dict) -> dict[str, Any]:
         out["deviceMemory"] = nav.get("deviceMemory")
         out["timezone"] = nav.get("timezone")
         scr = nav.get("screen") or {}
-        inn = nav.get("inner") or {}
         out["screen"] = f"{scr.get('w')}x{scr.get('h')}" if isinstance(scr, dict) else scr
-        out["inner"] = f"{inn.get('w')}x{inn.get('h')}" if isinstance(inn, dict) else inn
+        # NOTE: navigator.inner (viewport WxH) was dropped from the comparison
+        # table when probes moved to the engine's canonical NAV_PROBE, which
+        # omits it. All other rows are unchanged. Re-add via an engine superset
+        # bump if viewport size is needed here again.
         wgl = nav.get("webgl") or {}
         out["webgl_vendor"] = wgl.get("vendor") if isinstance(wgl, dict) else wgl
         out["webgl_renderer"] = wgl.get("renderer") if isinstance(wgl, dict) else wgl
