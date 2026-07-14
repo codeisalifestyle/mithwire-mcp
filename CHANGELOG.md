@@ -5,6 +5,13 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.2.2](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.2.1...v0.2.2) (2026-06-20)
+
+
+### Refactors
+
+* **baseline-probe:** consume engine stealth_diagnostic probes ([#10](https://github.com/codeisalifestyle/mithwire-mcp/issues/10)) ([e9102cf](https://github.com/codeisalifestyle/mithwire-mcp/commit/e9102cfc3037935a844cf29ab6c95e42e50f9f7b))
+
 ## [0.2.1](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.2.0...v0.2.1) (2026-06-13)
 
 
