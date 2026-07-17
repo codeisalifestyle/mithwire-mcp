@@ -975,6 +975,7 @@ class BrowserSessionManager:
         proxy_ref: str | None = None,
         fingerprint: dict[str, Any] | None = None,
         webrtc_leak_protection: str | None = None,
+        engine: str | None = None,
     ) -> dict[str, Any]:
         """Compute the launch options for a session using the 4-layer chain.
 
@@ -1006,6 +1007,7 @@ class BrowserSessionManager:
                     "proxy_ref": proxy_ref,
                     "fingerprint": fingerprint,
                     "webrtc_leak_protection": webrtc_leak_protection,
+                    "engine": engine,
                 }.items()
                 if value is not None
             }
@@ -1125,6 +1127,7 @@ class BrowserSessionManager:
         proxy_ref: str | None = None,
         fingerprint: dict[str, Any] | None = None,
         webrtc_leak_protection: str | None = None,
+        engine: str | None = None,
     ) -> dict[str, Any]:
         resolved_session_id = session_id or f"sess_{uuid.uuid4().hex[:12]}"
         launch_context = self._resolve_launch_context(
@@ -1141,6 +1144,7 @@ class BrowserSessionManager:
             proxy_ref=proxy_ref,
             fingerprint=fingerprint,
             webrtc_leak_protection=webrtc_leak_protection,
+            engine=engine,
         )
         launch_values = launch_context["values"]
         resolved_headless = bool(launch_values.get("headless", False))
@@ -1154,6 +1158,22 @@ class BrowserSessionManager:
         resolved_proxy_spec = launch_values.get("proxy")
         proxy_config = parse_proxy(resolved_proxy_spec)
         user_fingerprint = FingerprintConfig.from_dict(launch_values.get("fingerprint"))
+
+        # ENGINE MODE RESOLUTION
+        resolved_engine = str(launch_values.get("engine") or "stock").strip().lower()
+        if resolved_engine not in ("stock", "stealth"):
+            raise ValueError(
+                f"Unknown engine '{resolved_engine}'. Use 'stock' (default) or 'stealth'."
+            )
+        if resolved_engine == "stealth":
+            from .cloakbrowser_adapter import is_platform_supported
+
+            if not is_platform_supported():
+                logger.warning(
+                    "engine='stealth' requested but platform is not Linux. "
+                    "Falling back to engine='stock'."
+                )
+                resolved_engine = "stock"
 
         # PRE-LAUNCH PROXY HEALTH CHECK
         # A session whose configured proxy is dead or has bad credentials must
@@ -1189,6 +1209,25 @@ class BrowserSessionManager:
         )
         fingerprint_config = proxy_defaults.merged_with(user_fingerprint)
 
+        # When engine=stealth, resolve the CloakBrowser binary and translate
+        # the fingerprint into native CLI flags. The binary handles canvas,
+        # WebGL, audio, fonts, GPU, screen, and WebRTC at the C++ level, so
+        # Mithwire's JS/CDP overrides for those surfaces are skipped.
+        if resolved_engine == "stealth":
+            from .cloakbrowser_adapter import build_launch_config
+
+            cb_binary, cb_flags = build_launch_config(
+                fingerprint_config,
+                proxy=proxy_config,
+            )
+            resolved_browser_executable_path = cb_binary
+            resolved_browser_args.extend(cb_flags)
+            logger.info(
+                "Stealth engine: CloakBrowser binary at %s with %d flags",
+                cb_binary,
+                len(cb_flags),
+            )
+
         browser = BridgeBrowser(
             headless=resolved_headless,
             user_data_dir=resolved_user_data_dir,
@@ -1198,6 +1237,7 @@ class BrowserSessionManager:
             proxy=proxy_config,
             fingerprint=fingerprint_config,
             webrtc_leak_protection=launch_values.get("webrtc_leak_protection") or "auto",
+            engine=resolved_engine,
         )
         await browser.start()
         try:
@@ -1260,6 +1300,7 @@ class BrowserSessionManager:
                     "browser_args": list(resolved_browser_args),
                     "browser_executable_path": resolved_browser_executable_path,
                     "sandbox": resolved_sandbox,
+                    "engine": resolved_engine,
                     "proxy": proxy_config.to_metadata() if proxy_config else None,
                     "proxy_timezone": browser.timezone_id,
                     "proxy_exit": proxy_timezone_info,

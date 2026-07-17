@@ -146,6 +146,7 @@ Everything else is an optional flag on top of those two:
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `headless` | `false` (headful) | Run without a visible window (e.g. CI). |
+| `engine` | `stock` | `stock` uses system Chrome with CDP/JS patches; `stealth` uses CloakBrowser (Linux only; see below). |
 | `proxy` | none | Route traffic through an upstream proxy (see below). |
 | `fingerprint` | none | Identity overrides — timezone, locale/languages, geo, user agent, platform, hardware, screen, WebGL (see below). |
 | `webrtc_leak_protection` | `auto` | Guard WebRTC against real-IP leaks: `auto` / `filter` / `disable` / `off` (see below). |
@@ -200,6 +201,27 @@ or in the profile's `launch_options` wins. SOCKS proxies get a TCP-only liveness
 check, with timezone alignment falling back to the in-browser ipapi.is lookup. The
 detected egress (`ip`, `timezone`, `city`, `country`, `country_code`) is recorded
 in session metadata under `proxy_exit`.
+
+### 🧬 Engine modes
+
+`engine` controls the stealth implementation:
+
+| Engine | Binary | Stealth approach | Platforms |
+| --- | --- | --- | --- |
+| `stock` (default) | System Chrome/Chromium | CDP/JS overrides — timezone, UA, platform, WebGL, WebRTC, device metrics, and more applied at runtime via Chrome DevTools Protocol and injected JavaScript. | All (Linux, macOS, Windows) |
+| `stealth` | [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) | C++ source-level patches — fingerprint surfaces (canvas, WebGL, audio, fonts, GPU, screen, TLS, CDP detection) are modified directly in the Chromium source code before compilation. Zero runtime JS injection for covered surfaces. | Linux only |
+
+When `engine=stealth` is requested on a non-Linux platform, it falls back to `stock` with a warning.
+
+**Install the stealth engine extras:**
+
+```bash
+pip install mithwire-mcp[stealth]
+```
+
+The `cloakbrowser` package auto-downloads the binary on first use and caches it locally (~/.cloakbrowser/). CloakBrowser is a third-party dependency — the binary is proprietary (free to use, not redistributable) while the Python wrapper is MIT-licensed. Users with a CloakBrowser Pro key can set `CLOAKBROWSER_PRO_KEY` for access to the latest binary builds. See the [CloakBrowser project](https://github.com/CloakHQ/CloakBrowser) for details.
+
+In stealth mode, Mithwire still applies CDP timezone, locale, geolocation, and Accept-Language overrides (these complement rather than conflict with the binary's patches), and the full proxy integration (relay, health check, identity alignment, rotation) works identically.
 
 ### 🎭 Fingerprint / identity spoofing
 
