@@ -1219,6 +1219,8 @@ class BrowserSessionManager:
             cb_binary, cb_flags = build_launch_config(
                 fingerprint_config,
                 proxy=proxy_config,
+                profile_name=launch_context.get("profile_name"),
+                headless=resolved_headless,
             )
             resolved_browser_executable_path = cb_binary
             resolved_browser_args.extend(cb_flags)
