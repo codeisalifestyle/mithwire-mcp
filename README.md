@@ -219,9 +219,26 @@ When `engine=stealth` is requested on a non-Linux platform, it falls back to `st
 pip install mithwire-mcp[stealth]
 ```
 
-The `cloakbrowser` package auto-downloads the binary on first use and caches it locally (~/.cloakbrowser/). CloakBrowser is a third-party dependency — the binary is proprietary (free to use, not redistributable) while the Python wrapper is MIT-licensed. Users with a CloakBrowser Pro key can set `CLOAKBROWSER_PRO_KEY` for access to the latest binary builds. See the [CloakBrowser project](https://github.com/CloakHQ/CloakBrowser) for details.
+The `cloakbrowser` package auto-downloads the binary on first use and caches it locally (`~/.cloakbrowser/`). CloakBrowser is a third-party dependency — the binary is proprietary (free to use, not redistributable) while the Python wrapper is MIT-licensed. Users with a CloakBrowser Pro key can set `CLOAKBROWSER_PRO_KEY` for access to the latest binary builds. See the [CloakBrowser project](https://github.com/CloakHQ/CloakBrowser) for details.
+
+**How stealth mode works.** CloakBrowser generates a complete, internally consistent fingerprint from a single integer seed (`--fingerprint=<seed>`). When a managed profile is used, the seed is deterministic (derived from the profile name), so the same profile always presents the same canvas hash, WebGL renderer, audio context, etc. Without a profile, a random seed is chosen per session. The binary patches UA, platform, GPU, hardware concurrency, screen dimensions, canvas, audio, fonts, and more at the C++ level — the page's JavaScript sees only native values with no detectable overrides.
 
 In stealth mode, Mithwire still applies CDP timezone, locale, geolocation, and Accept-Language overrides (these complement rather than conflict with the binary's patches), and the full proxy integration (relay, health check, identity alignment, rotation) works identically.
+
+**Recommended stealth preset.** Create a preset that combines the stealth engine with sensible defaults:
+
+```
+session_preset_set(
+  preset_name="stealth-linux",
+  values={
+    "engine": "stealth",
+    "headless": true,
+    "webrtc_leak_protection": "filter"
+  }
+)
+```
+
+Then launch sessions with `session_start(preset="stealth-linux")` or attach it to profiles via `session_profile_set(profile="my-identity", preset="stealth-linux")`.
 
 ### 🎭 Fingerprint / identity spoofing
 
