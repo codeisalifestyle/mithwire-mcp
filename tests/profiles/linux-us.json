@@ -1,0 +1,23 @@
+{
+  "name": "linux-us-east",
+  "timezone_id": "America/New_York",
+  "languages": ["en-US", "en"],
+  "accept_language": "en-US,en",
+  "platform": "Linux x86_64",
+  "screen_width": 1920,
+  "screen_height": 1080,
+  "device_scale_factor": 1.0,
+  "mobile": false,
+  "max_touch_points": 0,
+  "hardware_concurrency": 8,
+  "device_memory": 16,
+  "latitude": 40.7128,
+  "longitude": -74.0060,
+  "geo_accuracy": 50.0,
+  "webgl_vendor": "Google Inc. (NVIDIA Corporation)",
+  "webgl_renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3060/PCIe/SSE2, OpenGL ES 3.2)",
+  "source": {
+    "preset": "linux-us-east",
+    "notes": "same-OS-family Linux/NYC identity; common NVIDIA desktop; pairs with US residential exit"
+  }
+}
