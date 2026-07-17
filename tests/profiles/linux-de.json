@@ -1,0 +1,23 @@
+{
+  "name": "linux-de-berlin",
+  "timezone_id": "Europe/Berlin",
+  "languages": ["de-DE", "de", "en"],
+  "accept_language": "de-DE,de,en",
+  "platform": "Linux x86_64",
+  "screen_width": 2560,
+  "screen_height": 1440,
+  "device_scale_factor": 1.0,
+  "mobile": false,
+  "max_touch_points": 0,
+  "hardware_concurrency": 16,
+  "device_memory": 32,
+  "latitude": 52.5200,
+  "longitude": 13.4050,
+  "geo_accuracy": 50.0,
+  "webgl_vendor": "Google Inc. (AMD)",
+  "webgl_renderer": "ANGLE (AMD, AMD Radeon RX 6700 XT (navi22, LLVM 17.0.6, DRM 3.54, 6.5.0-44-generic), OpenGL ES 3.2)",
+  "source": {
+    "preset": "linux-de-berlin",
+    "notes": "same-OS-family Linux/Berlin identity; AMD discrete GPU; high-spec workstation"
+  }
+}

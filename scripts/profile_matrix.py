@@ -118,12 +118,14 @@ GateUnreachable = "unreachable"
 # Depth-layer detection signals the project accepts BY POLICY (documented in
 # SITE_PARSING.md). A flag listed here does not fail the gate; any flag NOT
 # listed here does. Widening this set is a reviewed, deliberate decision.
+#
+# As of the ELE-38 fix, navigator.platform is now spoofed in worker contexts
+# via the bootstrap JS, so same-OS-family profiles (e.g. linux-* on Linux
+# CI, mac-* on macOS) should pass with zero accepted flags.  Cross-OS
+# profiles (mac-* on Linux CI) may still trip hasInconsistentWorkerValues
+# for deeper signals the bootstrap cannot reach (e.g. UA string in
+# SharedWorker), so the flag stays accepted until those gaps close.
 ACCEPTED_FLAGS: frozenset[str] = frozenset({
-    # Fingerprint overrides are injected per-document and never reach Worker
-    # scopes, so a worker reports the host's real platform/cores/UA. Any
-    # cross-OS spoof (e.g. mac profile on the Linux CI runner) therefore
-    # trips this flag. Accepted: worker-scope overrides are a deliberate
-    # non-goal -- a depth layer most anti-detect checks never probe.
     "hasInconsistentWorkerValues",
 })
 
