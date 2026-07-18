@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import socket
 import subprocess
@@ -71,7 +72,7 @@ from mithwire.stealth_diagnostic.probes import (  # noqa: E402
     parse as _parse,
 )
 from browserleaks_probes import BROWSERLEAKS_SITES  # noqa: E402
-from detection_probes import DETECTION_SITES  # noqa: E402
+from detection_probes import DETECTION_SITES, IP_QUALITY_SITES  # noqa: E402
 from captcha_probes import CAPTCHA_SITES  # noqa: E402
 
 # fingerprint.com (Fingerprint Pro) computes its verdict server-side and POSTs it
@@ -699,6 +700,8 @@ async def run(
     skip_browserleaks: bool = False,
     skip_detection: bool = False,
     skip_captcha: bool = False,
+    skip_ipquality: bool = False,
+    ovpjs_url: str | None = None,
     fingerprint: dict | None = None,
     align_to_proxy: bool = False,
     webrtc: str | None = None,
@@ -773,6 +776,20 @@ async def run(
                         await _guard("solve_turnstile", driver.solve_turnstile(), 30)
                     except Exception:  # noqa: BLE001
                         pass
+                result["probes"][key] = _parse(
+                    await _guard(key, driver.evaluate(_wrap(probe)), probe_to)
+                )
+        # IP-quality sites: only run when a proxy is active (otherwise their
+        # IP reputation/datacenter checks produce expected-bad results that
+        # aren't useful for browser-quality assessment).
+        if not skip_ipquality and proxy:
+            for key, url_tmpl, wait, probe, probe_to in IP_QUALITY_SITES:
+                url = url_tmpl
+                if key == "ovpjs":
+                    url = ovpjs_url
+                if not url:
+                    continue
+                await _guard(f"nav {key}", driver.navigate(url, wait), 40)
                 result["probes"][key] = _parse(
                     await _guard(key, driver.evaluate(_wrap(probe)), probe_to)
                 )
@@ -962,16 +979,17 @@ def _flatten(result: dict) -> dict[str, Any]:
     if isinstance(px, dict) and px.get("ready"):
         out["px_verdict"] = px.get("overall")
         out["px_clear"] = f"{px.get('categoriesClear')}/{px.get('categoriesTotal')}"
-    iphey = result.get("probes", {}).get("iphey") or {}
-    if isinstance(iphey, dict) and iphey.get("ready"):
-        out["iphey_overall"] = iphey.get("overall")
-        out["iphey_fp_clean"] = iphey.get("fingerprintClean")
-        fp_errs = iphey.get("fingerprintErrors") or []
-        if fp_errs:
-            out["iphey_fp_bad"] = fp_errs
-        geo_errs = iphey.get("geoErrors") or []
-        if geo_errs:
-            out["iphey_geo_errs"] = geo_errs
+    ovp = result.get("probes", {}).get("ovpjs") or {}
+    if isinstance(ovp, dict) and ovp.get("ready"):
+        out["ovp_botScore"] = ovp.get("botScore")
+        out["ovp_isIncognito"] = ovp.get("isIncognito")
+        out["ovp_isAntiDetect"] = ovp.get("isAntiDetect")
+        out["ovp_hasCanvasNoise"] = ovp.get("hasCanvasNoise")
+        out["ovp_isFakeUA"] = ovp.get("isFakeUserAgent")
+        out["ovp_datacenter"] = ovp.get("datacenter")
+        out["ovp_isAnonymous"] = ovp.get("isAnonymous")
+    elif isinstance(ovp, dict) and ovp:
+        out["ovp_botScore"] = ovp.get("error") or ovp.get("__timeout__") or "n/a"
     rc = result.get("probes", {}).get("recaptcha_v3") or {}
     if isinstance(rc, dict) and rc.get("ready"):
         out["rc_v3_score"] = rc.get("score")
@@ -1015,6 +1033,19 @@ def compare(paths: list[str]) -> None:
         print(row + "  ".join(cells))
 
 
+def _doppler_secrets(project: str, config: str, keys: list[str]) -> dict[str, str]:
+    """Fetch secrets from Doppler CLI (best-effort, returns {} on failure)."""
+    try:
+        out = subprocess.check_output(
+            ["doppler", "secrets", "get", *keys,
+             "--project", project, "--config", config, "--plain"],
+            text=True, timeout=10,
+        ).strip().split("\n")
+        return dict(zip(keys, out)) if len(out) == len(keys) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -1050,12 +1081,32 @@ def main() -> None:
     ap.add_argument(
         "--skip-detection",
         action="store_true",
-        help="Skip extended detection sites (BrowserScan, incolumitas, Pixelscan, iphey).",
+        help="Skip extended detection sites (BrowserScan, incolumitas, Pixelscan).",
     )
     ap.add_argument(
         "--skip-captcha",
         action="store_true",
         help="Skip captcha presentation/pass probes (reCAPTCHA v3, Turnstile).",
+    )
+    ap.add_argument(
+        "--skip-ipquality",
+        action="store_true",
+        help="Skip IP-quality sites (OVP.js). These are auto-skipped when no proxy is set.",
+    )
+    ap.add_argument(
+        "--ovpjs-url",
+        default=None,
+        help="OVP.js demo URL with API key. Falls back to OVPJS_URL env var or Doppler.",
+    )
+    ap.add_argument(
+        "--doppler-project",
+        default="mithwire",
+        help="Doppler project for secrets (proxy, OVP URL). Default: mithwire.",
+    )
+    ap.add_argument(
+        "--doppler-config",
+        default="prod",
+        help="Doppler config environment. Default: prod.",
     )
     ap.add_argument(
         "--fingerprint",
@@ -1120,16 +1171,41 @@ def main() -> None:
     if args.fingerprint:
         fingerprint = json.loads(Path(args.fingerprint).read_text())
 
+    # Resolve proxy from Doppler when --proxy=doppler
+    proxy = args.proxy
+    ovpjs_url = args.ovpjs_url or os.environ.get("OVPJS_URL")
+    if proxy == "doppler" or (not proxy and not args.skip_ipquality):
+        try:
+            _dop = _doppler_secrets(args.doppler_project, args.doppler_config,
+                                    ["DEV_PROXY_HTTP", "DEV_PROXY_ROTATION_URL", "OVPJS_URL"])
+            if proxy == "doppler":
+                raw = _dop.get("DEV_PROXY_HTTP", "")
+                if raw:
+                    parts = raw.split(":")
+                    if len(parts) == 4:
+                        proxy = f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
+                    else:
+                        proxy = raw
+                    rot = _dop.get("DEV_PROXY_ROTATION_URL")
+                    if rot:
+                        proxy = json.dumps({"server": proxy, "rotation_url": rot})
+            if not ovpjs_url:
+                ovpjs_url = _dop.get("OVPJS_URL")
+        except Exception:  # noqa: BLE001
+            pass
+
     result = asyncio.run(
         run(
             args.driver,
             args.headless,
-            args.proxy,
+            proxy,
             args.label,
             skip_fpcom=args.skip_fpcom,
             skip_browserleaks=args.skip_browserleaks,
             skip_detection=args.skip_detection,
             skip_captcha=args.skip_captcha,
+            skip_ipquality=args.skip_ipquality,
+            ovpjs_url=ovpjs_url,
             fingerprint=fingerprint,
             align_to_proxy=args.align_to_proxy,
             webrtc=args.webrtc_mode,

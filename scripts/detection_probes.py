@@ -145,39 +145,38 @@ PIXELSCAN_PROBE = _probe(r"""
   };
 """)
 
-IPHEY_PROBE = _probe(r"""
-  const heroReady = () => {
-    const h = document.getElementById('hero-status')?.innerText?.trim();
-    return h && h !== '...' && /reliable|unreliable/i.test(h);
+OVP_PROBE = _probe(r"""
+  const ready = () => {
+    const body = document.body.innerText;
+    return /"botScore"\s*:\s*\d/.test(body) || /Bot Score/i.test(body);
   };
-  const tilesExist = () => document.querySelectorAll('a.code-block').length >= 4;
-  const deadline = Date.now() + 28000;
-  while (Date.now() < deadline && !(heroReady() && tilesExist())) { await sleep(400); }
-  const overall = document.getElementById('hero-status')?.innerText?.trim();
-  if (!overall) return { ready: false, error: 'no-hero-status' };
-  const tiles = [...document.querySelectorAll('a.code-block')]
-    .map((a) => ({
-      label: a.querySelector('h4')?.innerText?.trim(),
-      status: a.querySelector('p')?.innerText?.trim(),
-      error: a.classList.contains('code-block--error'),
-    }))
-    .filter((t) => t.label);
-  const errorTiles = tiles.filter((t) => t.error).map((t) => t.label);
-  // LOCATION tile errors are geo-permission issues (expected on headless/VPS),
-  // not browser fingerprint failures. Separate them from real detection flags.
-  const fingerprintTiles = ['BROWSER', 'HARDWARE', 'SOFTWARE'];
-  const fpErrors = errorTiles.filter((t) => fingerprintTiles.includes(t));
-  const geoErrors = errorTiles.filter((t) => !fingerprintTiles.includes(t));
-  const fpClean = fpErrors.length === 0;
+  const deadline = Date.now() + 25000;
+  while (Date.now() < deadline && !ready()) { await sleep(400); }
+  const body = document.body.innerText;
+  if (!ready()) return { ready: false, error: 'no-bot-score' };
+
+  const num = (re) => { const m = body.match(re); return m ? Number(m[1]) : null; };
+  const str = (re) => { const m = body.match(re); return m ? m[1].trim() : null; };
+  const bool = (re) => { const m = body.match(re); return m ? m[1] === 'true' : null; };
+
+  const botScore = num(/"botScore"\s*:\s*(\d+)/);
   return {
     ready: true,
-    overall,
-    isReliable: /reliable/i.test(overall) && !/unreliable/i.test(overall),
-    fingerprintClean: fpClean,
-    tiles,
-    errorTiles,
-    fingerprintErrors: fpErrors,
-    geoErrors,
+    botScore,
+    clusterUUID: str(/"clusterUUID"\s*:\s*"([^"]+)"/),
+    browserName: str(/"browserName"\s*:\s*"([^"]+)"/),
+    platformName: str(/"platformName"\s*:\s*"([^"]+)"/),
+    hasCanvasNoise: bool(/"hasCanvasNoise"\s*:\s*(true|false)/),
+    isIncognito: bool(/"isIncognito"\s*:\s*(true|false)/),
+    isFakeUserAgent: bool(/"isFakeUserAgent"\s*:\s*(true|false)/),
+    isAntiDetect: bool(/"isAntiDetect"\s*:\s*(true|false)/),
+    isVirtualMachine: bool(/"isVirtualMachine"\s*:\s*(true|false)/),
+    datacenter: bool(/"datacenter"\s*:\s*(true|false)/),
+    isAnonymous: bool(/"isAnonymous"\s*:\s*(true|false)/),
+    vpn: bool(/"vpn"\s*:\s*(true|false)/),
+    tor: bool(/"tor"\s*:\s*(true|false)/),
+    isWebView: bool(/"isWebView"\s*:\s*(true|false)/),
+    isRootedDevice: bool(/"isRootedDevice"\s*:\s*(true|false)/),
   };
 """)
 
@@ -204,11 +203,16 @@ DETECTION_SITES: list[tuple[str, str, float, str, float]] = [
         PIXELSCAN_PROBE,
         38.0,
     ),
+]
+
+# Sites that evaluate IP quality/reputation alongside browser signals.
+# Only meaningful when a residential/mobile proxy is active; skip otherwise.
+IP_QUALITY_SITES: list[tuple[str, str, float, str, float]] = [
     (
-        "iphey",
-        "https://iphey.com/",
+        "ovpjs",
+        None,  # URL set at runtime from Doppler / --ovpjs-url
         3.0,
-        IPHEY_PROBE,
-        36.0,
+        OVP_PROBE,
+        32.0,
     ),
 ]
