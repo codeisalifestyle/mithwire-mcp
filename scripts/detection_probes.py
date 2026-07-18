@@ -146,24 +146,35 @@ PIXELSCAN_PROBE = _probe(r"""
 """)
 
 OVP_PROBE = _probe(r"""
-  const ready = () => {
-    const body = document.body.innerText;
-    return /"botScore"\s*:\s*\d/.test(body) || /Bot Score/i.test(body);
-  };
+  // Wait for the page to render results (either public demo or API-key demo).
+  const hasResult = () => /Bot Score|"botScore"/i.test(document.body.innerText);
   const deadline = Date.now() + 25000;
-  while (Date.now() < deadline && !ready()) { await sleep(400); }
-  const body = document.body.innerText;
-  if (!ready()) return { ready: false, error: 'no-bot-score' };
+  while (Date.now() < deadline && !hasResult()) { await sleep(400); }
+  if (!hasResult()) return { ready: false, error: 'no-bot-score' };
 
+  // API-key demo hides JSON behind a "SHOW JSON" button — click to reveal.
+  const showBtn = [...document.querySelectorAll('button')]
+    .find((b) => /show json/i.test(b.innerText));
+  if (showBtn) { showBtn.click(); await sleep(600); }
+
+  const body = document.body.innerText;
+
+  // Extract from the JSON block (present in both layouts once expanded).
   const num = (re) => { const m = body.match(re); return m ? Number(m[1]) : null; };
   const str = (re) => { const m = body.match(re); return m ? m[1].trim() : null; };
   const bool = (re) => { const m = body.match(re); return m ? m[1] === 'true' : null; };
 
-  const botScore = num(/"botScore"\s*:\s*(\d+)/);
+  // Fallback: API-key demo shows "Inconclusive (3)" or "Bot (5)" etc.
+  let botScore = num(/"botScore"\s*:\s*(\d+)/);
+  if (botScore === null) {
+    const bsMatch = body.match(/Bot Score[^]*?(\d)\)/);
+    if (bsMatch) botScore = Number(bsMatch[1]);
+  }
+
   return {
     ready: true,
     botScore,
-    clusterUUID: str(/"clusterUUID"\s*:\s*"([^"]+)"/),
+    clusterUUID: str(/"clusterUUID"\s*:\s*"([^"]+)"/) || str(/Browser Identifier\n([A-Z0-9-]+)/),
     browserName: str(/"browserName"\s*:\s*"([^"]+)"/),
     platformName: str(/"platformName"\s*:\s*"([^"]+)"/),
     hasCanvasNoise: bool(/"hasCanvasNoise"\s*:\s*(true|false)/),

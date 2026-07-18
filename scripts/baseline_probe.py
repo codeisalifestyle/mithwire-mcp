@@ -371,7 +371,7 @@ class BridgeDriver:
         self,
         *,
         headless: bool,
-        proxy: str | None,
+        proxy: str | dict | None,
         fingerprint: dict | None = None,
         align_to_proxy: bool = False,
         webrtc: str | None = None,
@@ -1172,7 +1172,7 @@ def main() -> None:
         fingerprint = json.loads(Path(args.fingerprint).read_text())
 
     # Resolve proxy from Doppler when --proxy=doppler
-    proxy = args.proxy
+    proxy: str | dict | None = args.proxy
     ovpjs_url = args.ovpjs_url or os.environ.get("OVPJS_URL")
     if proxy == "doppler" or (not proxy and not args.skip_ipquality):
         try:
@@ -1181,14 +1181,16 @@ def main() -> None:
             if proxy == "doppler":
                 raw = _dop.get("DEV_PROXY_HTTP", "")
                 if raw:
+                    # Doppler stores host:port:user:pass colon format
                     parts = raw.split(":")
-                    if len(parts) == 4:
-                        proxy = f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
+                    if len(parts) >= 4:
+                        host, port, user = parts[0], parts[1], parts[2]
+                        pwd = ":".join(parts[3:])
+                        server = f"http://{user}:{pwd}@{host}:{port}"
                     else:
-                        proxy = raw
+                        server = raw
                     rot = _dop.get("DEV_PROXY_ROTATION_URL")
-                    if rot:
-                        proxy = json.dumps({"server": proxy, "rotation_url": rot})
+                    proxy = {"server": server, "rotation_url": rot} if rot else server
             if not ovpjs_url:
                 ovpjs_url = _dop.get("OVPJS_URL")
         except Exception:  # noqa: BLE001
