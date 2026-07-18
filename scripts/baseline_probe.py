@@ -398,16 +398,25 @@ class BridgeDriver:
             ensure_virtual_display()
         from mithwire_mcp.browser import BridgeBrowser
         from mithwire_mcp.proxy import parse_proxy
+        from mithwire_mcp.fingerprint import FingerprintConfig
 
+        fp = FingerprintConfig.from_dict(self.fingerprint) if self.fingerprint else FingerprintConfig()
         kwargs: dict[str, Any] = {"headless": self.headless, "proxy": parse_proxy(self.proxy)}
         if self.webrtc:
             kwargs["webrtc_leak_protection"] = self.webrtc
         kwargs["engine"] = self.engine
-        if self.fingerprint:
-            # Imported from the same checkout as BridgeBrowser (honors --package-dir).
-            from mithwire_mcp.fingerprint import FingerprintConfig
+        if fp:
+            kwargs["fingerprint"] = fp
 
-            kwargs["fingerprint"] = FingerprintConfig.from_dict(self.fingerprint)
+        if self.engine == "stealth":
+            from mithwire_mcp.cloakbrowser_adapter import build_launch_config
+
+            cb_binary, cb_flags = build_launch_config(
+                fp, profile_name=None, headless=self.headless,
+            )
+            kwargs["browser_executable_path"] = cb_binary
+            kwargs.setdefault("browser_args", []).extend(cb_flags)
+
         self.b = BridgeBrowser(**kwargs)
         await self.b.start()
         # Mirror runtime.session_start: with a proxy set, align the browser
