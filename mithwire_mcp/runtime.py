@@ -109,6 +109,23 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _ua_platform_to_os(platform: str | None) -> str | None:
+    """Map navigator.platform values to BrowserForge OS names."""
+    if not platform:
+        return None
+    mapping = {
+        "MacIntel": "macos",
+        "macOS": "macos",
+        "Win32": "windows",
+        "Win64": "windows",
+        "Windows": "windows",
+        "Linux x86_64": "linux",
+        "Linux armv81": "linux",
+        "Linux": "linux",
+    }
+    return mapping.get(platform)
+
+
 def _extract_estimated_settle(response: Any) -> float | None:
     """Pull a settle-time hint out of a provider's rotation response, if any.
 
@@ -1207,6 +1224,31 @@ class BrowserSessionManager:
             if proxy_egress_data
             else FingerprintConfig()
         )
+
+        # BROWSERFORGE: when neither the user nor the proxy provides hardware
+        # identity fields (screen, concurrency, device memory), generate a
+        # statistically realistic set from BrowserForge's Bayesian network.
+        # This avoids generic / round-number defaults that fingerprinters flag.
+        merged_so_far = proxy_defaults.merged_with(user_fingerprint)
+        if (
+            merged_so_far.hardware_concurrency is None
+            and merged_so_far.device_memory is None
+            and not merged_so_far.has_device_metrics
+            and merged_so_far.user_agent is None
+        ):
+            try:
+                from . import fingerprint_gen
+
+                if fingerprint_gen.is_available():
+                    bf_fp = fingerprint_gen.generate(
+                        os=_ua_platform_to_os(merged_so_far.platform),
+                        locale=merged_so_far.primary_language,
+                    )
+                    proxy_defaults = bf_fp.merged_with(proxy_defaults)
+                    logger.info("BrowserForge generated realistic hardware fingerprint")
+            except Exception:  # noqa: BLE001
+                logger.debug("BrowserForge generation failed; using defaults", exc_info=True)
+
         fingerprint_config = proxy_defaults.merged_with(user_fingerprint)
 
         # When engine=stealth, resolve the CloakBrowser binary and translate
@@ -1229,6 +1271,17 @@ class BrowserSessionManager:
                 cb_binary,
                 len(cb_flags),
             )
+
+        # VIRTUAL DISPLAY: when headed mode is requested on a displayless
+        # Linux server, start Xvfb automatically. Running Chrome headed
+        # inside a virtual framebuffer eliminates headless-specific signals
+        # (toolbar gap, window chrome, storage quota) that fingerprinters flag.
+        if not resolved_headless:
+            from .virtual_display import ensure_virtual_display
+
+            vd = ensure_virtual_display()
+            if vd:
+                logger.info("Virtual display available at %s", vd)
 
         browser = BridgeBrowser(
             headless=resolved_headless,

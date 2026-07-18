@@ -133,6 +133,13 @@ def fingerprint_to_flags(
         seed = random.randint(10000, 99999)
     flags.append(f"--fingerprint={seed}")
 
+    # Disable canvas/audio noise injection. CloakBrowser's noise adds
+    # detectable entropy that OVP and FingerprintJS flag as tampering
+    # (hasCanvasNoise=true, browser tampering smart signal). Deterministic
+    # rendering from the seed is sufficient for cross-session uniqueness
+    # without triggering noise-detection heuristics.
+    flags.append("--fingerprint-noise=false")
+
     if fp.platform:
         cb_platform = _LEGACY_PLATFORM_TO_CB.get(fp.platform)
         if cb_platform:
