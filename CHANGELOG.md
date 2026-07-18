@@ -5,6 +5,25 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.3.0](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.2.2...v0.3.0) (2026-07-19)
+
+
+### Features
+
+* **stealth:** CloakBrowser engine integration with fingerprint-platform auto-detection ([730cfdb](https://github.com/codeisalifestyle/mithwire-mcp/commit/730cfdb))
+* **stealth:** BridgeDriver resolves CloakBrowser binary for engine=stealth ([e94fb74](https://github.com/codeisalifestyle/mithwire-mcp/commit/e94fb74))
+* **test-suite:** BrowserLeaks probes (JS, canvas, WebGL, WebRTC, fonts, TLS) ([e7a7b1e](https://github.com/codeisalifestyle/mithwire-mcp/commit/e7a7b1e))
+* **test-suite:** detection site probes (BrowserScan, Incolumitas, Pixelscan) ([4383139](https://github.com/codeisalifestyle/mithwire-mcp/commit/4383139))
+* **test-suite:** captcha probes (reCAPTCHA v3, Cloudflare Turnstile) ([4383139](https://github.com/codeisalifestyle/mithwire-mcp/commit/4383139))
+* **test-suite:** OVP.js integration with Doppler proxy and IP-quality site support ([3f19336](https://github.com/codeisalifestyle/mithwire-mcp/commit/3f19336))
+* **runtime:** Xvfb virtual display manager and BrowserForge fingerprint generation ([16fc2eb](https://github.com/codeisalifestyle/mithwire-mcp/commit/16fc2eb))
+
+
+### Bug Fixes
+
+* **stealth:** CloakBrowser fingerprint-platform defaults to host OS, not windows ([730cfdb](https://github.com/codeisalifestyle/mithwire-mcp/commit/730cfdb))
+* **test-suite:** OVP probe handles API-key demo layout and null-safety ([e13ccc1](https://github.com/codeisalifestyle/mithwire-mcp/commit/e13ccc1))
+
 ## [0.2.2](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.2.1...v0.2.2) (2026-06-20)
 
 
