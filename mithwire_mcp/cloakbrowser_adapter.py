@@ -140,14 +140,14 @@ def fingerprint_to_flags(
     # without triggering noise-detection heuristics.
     flags.append("--fingerprint-noise=false")
 
+    host_cb = "linux" if sys.platform.startswith("linux") else (
+        "macos" if sys.platform == "darwin" else "windows"
+    )
     if fp.platform:
-        cb_platform = _LEGACY_PLATFORM_TO_CB.get(fp.platform)
-        if cb_platform:
-            flags.append(f"--fingerprint-platform={cb_platform}")
-        else:
-            flags.append("--fingerprint-platform=windows")
+        cb_platform = _LEGACY_PLATFORM_TO_CB.get(fp.platform, host_cb)
+        flags.append(f"--fingerprint-platform={cb_platform}")
     else:
-        flags.append("--fingerprint-platform=windows")
+        flags.append(f"--fingerprint-platform={host_cb}")
 
     if fp.timezone_id:
         flags.append(f"--fingerprint-timezone={fp.timezone_id}")
