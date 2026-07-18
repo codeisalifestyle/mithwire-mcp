@@ -165,6 +165,11 @@ def create_server(
             "proxy, proxy_ref, start_url, cookie_file (one-shot cookie injection), "
             "preset (apply a saved launch recipe; overrides the profile's own preset "
             "for this run only). "
+            "engine selects the browser engine: 'stock' (default) uses the system "
+            "Chrome with Mithwire CDP/JS patches; 'stealth' uses a CloakBrowser "
+            "binary with C++ source-level fingerprint patches for zero-lie stealth "
+            "(Linux only; requires pip install mithwire-mcp[stealth]). On non-Linux "
+            "platforms, 'stealth' falls back to 'stock' with a warning. "
             "proxy accepts 'http://host:port', 'http://user:pass@host:port', the "
             "provider 'scheme:host:port:user:pass' form, or socks5://host:port "
             "(authenticated SOCKS not wired yet; use the HTTP endpoint). "
@@ -205,6 +210,7 @@ def create_server(
         proxy_ref: str | None = None,
         fingerprint: dict[str, Any] | None = None,
         webrtc_leak_protection: str | None = None,
+        engine: str | None = None,
     ) -> dict[str, Any]:
         return await manager.start_session(
             session_id=session_id,
@@ -221,6 +227,7 @@ def create_server(
             proxy_ref=proxy_ref,
             fingerprint=fingerprint,
             webrtc_leak_protection=webrtc_leak_protection,
+            engine=engine,
         )
 
     @mcp.tool(
@@ -309,7 +316,7 @@ def create_server(
             "of the preset, keyed by the same fields session_start accepts (headless, "
             "start_url, browser_args, sandbox, fingerprint, proxy, proxy_ref, "
             "cookie_file, cookie_fallback_domain, webrtc_leak_protection, "
-            "browser_executable_path, user_data_dir)."
+            "browser_executable_path, user_data_dir, engine)."
         ),
     )
     async def session_profile_set(
@@ -357,7 +364,8 @@ def create_server(
             "Create or update a preset. ``values`` accepts the same fields "
             "session_start does (headless, start_url, browser_args, sandbox, "
             "fingerprint, proxy, proxy_ref, cookie_file, cookie_fallback_domain, "
-            "webrtc_leak_protection, browser_executable_path, user_data_dir). "
+            "webrtc_leak_protection, browser_executable_path, user_data_dir, "
+            "engine). "
             "Profiles point at a preset by setting ``preset: <name>`` in "
             "session_profile_set; session_start can also pass preset=<name> to "
             "override the profile's own preset for one run."

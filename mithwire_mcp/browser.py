@@ -38,6 +38,7 @@ class BridgeBrowser:
         proxy: ProxyConfig | None = None,
         fingerprint: FingerprintConfig | None = None,
         webrtc_leak_protection: str = "auto",
+        engine: str = "stock",
     ):
         self.headless = headless
         self.user_data_dir = user_data_dir
@@ -45,6 +46,7 @@ class BridgeBrowser:
         self.browser_executable_path = browser_executable_path
         self.sandbox = sandbox
         self.proxy = proxy
+        self.engine = engine
         # Configured identity. Engine-owned stealth is the source of truth once
         # the browser is started; see the ``fingerprint`` property below.
         self._fingerprint = fingerprint or FingerprintConfig()
@@ -146,6 +148,9 @@ class BridgeBrowser:
             # ``self.browser.stealth``.
             "fingerprint": self._fingerprint,
             "webrtc_leak_protection": self.webrtc_leak_protection,
+            # When engine=stealth (CloakBrowser), the Stealth controller skips
+            # JS/CDP overrides for surfaces the binary patches at C++ level.
+            "engine": self.engine,
         }
         if self.user_data_dir:
             config_kwargs["user_data_dir"] = self.user_data_dir

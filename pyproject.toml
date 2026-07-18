@@ -25,6 +25,10 @@ include-package-data = true
 [tool.setuptools.packages.find]
 include = ["mithwire_mcp*"]
 
+[project.optional-dependencies]
+stealth = ["cloakbrowser>=0.3.27"]
+fingerprints = ["browserforge>=1.2"]
+
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
 
