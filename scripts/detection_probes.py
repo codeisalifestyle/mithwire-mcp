@@ -146,13 +146,22 @@ PIXELSCAN_PROBE = _probe(r"""
 """)
 
 IPHEY_PROBE = _probe(r"""
-  const ready = () => {
-    const hero = document.getElementById('hero-status')?.innerText?.trim();
-    const tiles = document.querySelectorAll('a.code-block');
-    return hero && hero !== '...' && tiles.length >= 4;
+  const tilesFilled = () => {
+    const all = [...document.querySelectorAll('a.code-block')];
+    if (all.length < 4) return false;
+    const fpTiles = all.filter((a) =>
+      /^(BROWSER|HARDWARE|SOFTWARE)$/i.test(a.querySelector('h4')?.innerText?.trim() || ''));
+    return fpTiles.length >= 3 && fpTiles.every((a) => {
+      const st = a.querySelector('p')?.innerText?.trim() || '';
+      return st && !/click here/i.test(st) && st !== '...';
+    });
   };
-  const deadline = Date.now() + 22000;
-  while (Date.now() < deadline && !ready()) { await sleep(400); }
+  const heroReady = () => {
+    const h = document.getElementById('hero-status')?.innerText?.trim();
+    return h && h !== '...' && /reliable|unreliable/i.test(h);
+  };
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline && (!heroReady() || !tilesFilled())) { await sleep(400); }
   const overall = document.getElementById('hero-status')?.innerText?.trim();
   if (!overall) return { ready: false, error: 'no-hero-status' };
   const tiles = [...document.querySelectorAll('a.code-block')]
@@ -168,7 +177,6 @@ IPHEY_PROBE = _probe(r"""
   const fingerprintTiles = ['BROWSER', 'HARDWARE', 'SOFTWARE'];
   const fpErrors = errorTiles.filter((t) => fingerprintTiles.includes(t));
   const geoErrors = errorTiles.filter((t) => !fingerprintTiles.includes(t));
-  // "Reliable" from a fingerprint perspective if BROWSER/HARDWARE/SOFTWARE pass
   const fpClean = fpErrors.length === 0;
   return {
     ready: true,
@@ -208,8 +216,8 @@ DETECTION_SITES: list[tuple[str, str, float, str, float]] = [
     (
         "iphey",
         "https://iphey.com/",
-        2.0,
+        3.0,
         IPHEY_PROBE,
-        28.0,
+        36.0,
     ),
 ]
