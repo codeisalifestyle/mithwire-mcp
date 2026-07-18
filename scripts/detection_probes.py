@@ -150,7 +150,7 @@ OVP_PROBE = _probe(r"""
   // clusterUUID card once the API call returns; the public demo renders
   // the JSON inline. Poll until either signal appears.
   const hasResult = () => {
-    const t = document.body.innerText;
+    const t = (document.body || {}).innerText || '';
     return /clusterUUID\s*\/\s*Browser Identifier\n[A-Z0-9-]{10,}/i.test(t)
       || /"botScore"\s*:\s*\d/.test(t);
   };
@@ -163,7 +163,7 @@ OVP_PROBE = _probe(r"""
     .find((b) => /show json/i.test(b.innerText));
   if (showBtn) { showBtn.click(); await sleep(800); }
 
-  const body = document.body.innerText;
+  const body = (document.body || {}).innerText || '';
 
   // Extract from the JSON block (present in both layouts once expanded).
   const num = (re) => { const m = body.match(re); return m ? Number(m[1]) : null; };
