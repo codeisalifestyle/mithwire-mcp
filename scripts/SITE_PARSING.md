@@ -323,3 +323,115 @@ HTTP/2, TCP, QUIC, and DNS tests are useful manually but overlap with signals
 already captured (navigator probe, api.ipapi.is) or are network-stack probes
 outside the browser fingerprint layer. Add them if a regression specifically
 targets those layers.
+
+## BrowserScan — `https://www.browserscan.net/bot-detection`
+
+- **How produced:** client-side JS renders category tabs (Webdriver, User-Agent,
+  CDP, Navigator) and a grid of named checks (WebDriver, Selenium, CDP, …)
+  each tagged ``Normal`` or a bot verdict. CSS class names are hashed
+  (``_1pu5vjm``-style) — do **not** anchor on them.
+- **Robust parse:** gate on body text matching
+  ``Test Results:\n{Normal|Bot|Detected|Suspicious}``. Overall verdict is
+  the word immediately after ``Test Results:``. Individual checks: walk ``div``
+  nodes with exactly two child elements whose second child text matches
+  ``/^(Normal|Bot|Detected|Suspicious)$/i`` — first child is the check name.
+- **Readiness:** ``Test Results:`` line populated (~25 s cap).
+- **Signals:** ``overall`` (e.g. ``Normal``), ``testsNormal`` /
+  ``testsTotal``, ``testsFailed`` (non-Normal check names), tab presence for
+  the four categories.
+- **Gotcha:** the site is a React SPA; allow a few seconds after navigation
+  before the summary renders.
+
+## bot.incolumitas.com — `https://bot.incolumitas.com/`
+
+- **How produced:** client-side tests populate stable ``<pre id="…">`` blocks
+  with JSON verdicts. ``#new-tests`` holds the current detection suite;
+  ``#detection-tests`` holds the legacy Intoli/fpscanner bundle.
+  ``#behavioralScore`` shows a 0–1 behavioral rating (updates at 1.5 s, 4 s,
+  7 s, 10 s, 15 s) but stays ``...`` until the first interval — optional signal.
+- **Robust parse:** ``JSON.parse(document.getElementById('new-tests').textContent)``
+  once the object has keys. Walk nested objects; any leaf value ``"FAIL"`` is
+  a failed test (build ``newFails`` / ``oldFails`` lists). Same pattern as the
+  site's own rendering — no body regex.
+- **Readiness:** ``#new-tests`` parses as JSON with ≥1 key (~22 s cap).
+- **Signals:** ``newFailCount``, ``oldFailCount``, ``totalFailCount``,
+  per-test fail lists, optional ``behavioralScore`` (poll ``#behavioralScore``
+  up to 16 s extra — may remain null on fast headless exits).
+- **CI note:** ``connectionRTT: FAIL`` is a known flaky signal on some
+  residential/datacenter paths; treat as informational unless it regresses
+  relative to baseline.
+
+## Pixelscan — `https://pixelscan.net/bot-check`
+
+- **How produced:** Angular SPA. User must trigger **Start Check** (the probe
+  clicks the button if present). Results render into ``#bot-check`` with an
+  overall ``h2`` verdict and four ``.summary-section`` tabs (Navigator,
+  Webdriver, CDP, User Agent) each with ``.summary-section__status`` (
+  ``Clear`` = pass).
+- **Robust parse:** after click, gate on ≥4 ``.summary-section__status`` cells
+  with non-empty text. Overall verdict: the bottom-most visible ``#bot-check h2``
+  matching ``/human|bot behavior/i`` (the page keeps both human/bot headings in
+  the DOM; the active result has the larger ``getBoundingClientRect().top``).
+  Category score: count sections where status is ``Clear``.
+- **Readiness:** four summary sections populated (~32 s cap after click).
+- **Signals:** ``overall`` (e.g. ``You're Definitely a Human``),
+  ``categoriesClear`` / ``categoriesTotal`` (expect 4/4 on clean browsers),
+  ``botDetected`` bool.
+- **Gotcha:** without clicking Start Check the scan never runs — the probe must
+  click programmatically.
+
+## iphey.com — `https://iphey.com/`
+
+- **How produced:** client-side fingerprint analysis populates a hero banner
+  and five ``a.code-block`` tiles (BROWSER, LOCATION, IP ADDRESS, HARDWARE,
+  SOFTWARE). Bad tiles get ``code-block--error``; good ones read e.g.
+  ``Everything is fine``.
+- **Robust parse:** gate on ``#hero-status`` non-empty (``Reliable``,
+  ``Unreliable``, ``Suspicious``, …) **and** ≥4 ``a.code-block`` tiles.
+  Parse each tile's ``h4`` (label) + ``p`` (status); ``errorTiles`` = labels
+  whose anchor has ``code-block--error``.
+- **Readiness:** ``#hero-status`` + tiles (~22 s cap).
+- **Signals:** ``overall`` hero verdict, ``isReliable`` bool, ``errorTiles``.
+- **Gotcha:** ``#bot`` in the nav is a page link, not the verdict — ignore it.
+
+## reCAPTCHA v3 — `https://recaptcha-demo.appspot.com/recaptcha-v3-request-scores.php`
+
+- **How produced:** Google's official demo executes ``grecaptcha.execute`` on
+  load, POSTs the token to ``/recaptcha-v3-verify.php``, and renders the
+  server JSON into a ``<pre>`` block (contains ``"score":``).
+- **Robust parse:** poll ``document.querySelectorAll('pre')`` for text that
+  ``JSON.parse``s to an object with numeric ``score``. No page tampering.
+- **Readiness:** a ``pre`` with parseable ``score`` (~30 s cap).
+- **Signals:** ``score`` (0.0–1.0), ``success``, ``action``, ``passed``
+  (``success && score >= 0.7``), ``challengePresent: false`` (v3 is invisible).
+- **Feasibility / caveats:**
+  - This demo uses Google's **live** sitekey and backend — scores reflect real
+    risk assessment (automation often lands 0.1–0.3; human browsers 0.7–0.9).
+  - Google's **test keys** (``6LeIxAcT…``) always return 0.9 but require hosting
+    your own page — not useful for cross-browser comparison on a fixed URL.
+  - There is no visible challenge for v3; ``challengePresent`` is always false.
+  - Scores vary by IP reputation and browsing history — compare relative to
+    baseline runs, not absolute thresholds across environments.
+
+## Cloudflare Turnstile — `https://seleniumbase.io/apps/turnstile`
+
+- **How produced:** real managed-mode Turnstile widget (``.cf-turnstile``).
+  On success the page reveals ``#captcha-success`` (``display`` flips from
+  ``none``). Token lands in ``input[name="cf-turnstile-response"]`` (or
+  ``input[id*="cf-chl-widget"]``).
+- **Robust parse — passive only:** poll up to ~28 s **without clicking**.
+  ``challengePresent`` = widget visible (iframe or non-zero height).
+  ``autoResolved`` / ``passed`` = ``#captcha-success`` visible **or** token
+  length > 20. Do **not** call ``verify_cf`` / solver helpers — we measure
+  whether the browser is suspected, not whether our solver works.
+- **Readiness:** widget **or** success indicator appears.
+- **Signals:** ``challengePresent``, ``tokenLength``, ``successVisible``,
+  ``autoResolved``, ``passed``, ``failed``.
+- **Feasibility / caveats:**
+  - Stock automation often shows the widget but never auto-resolves (``passed:
+    false``) — that is the expected bot signal.
+  - Stealth browsers (CloakBrowser) may auto-resolve without interaction.
+  - Cloudflare **dummy sitekeys** (``1x00000000000000000000AA``) always pass
+    but require a custom page; this harness uses a production-like widget.
+  - For solver verification use ``scripts/verify_mcp.py --site turnstile``
+    (exercises ``verify_cf`` explicitly).

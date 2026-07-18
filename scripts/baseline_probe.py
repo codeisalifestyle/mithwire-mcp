@@ -71,6 +71,8 @@ from mithwire.stealth_diagnostic.probes import (  # noqa: E402
     parse as _parse,
 )
 from browserleaks_probes import BROWSERLEAKS_SITES  # noqa: E402
+from detection_probes import DETECTION_SITES  # noqa: E402
+from captcha_probes import CAPTCHA_SITES  # noqa: E402
 
 # fingerprint.com (Fingerprint Pro) computes its verdict server-side and POSTs it
 # to /api/event/v4/<id>. Originally we captured that response PASSIVELY via CDP
@@ -676,6 +678,8 @@ async def run(
     *,
     skip_fpcom: bool = False,
     skip_browserleaks: bool = False,
+    skip_detection: bool = False,
+    skip_captcha: bool = False,
     fingerprint: dict | None = None,
     align_to_proxy: bool = False,
     webrtc: str | None = None,
@@ -732,6 +736,18 @@ async def run(
         )
         if not skip_browserleaks:
             for key, url, wait, probe, probe_to in BROWSERLEAKS_SITES:
+                await _guard(f"nav {key}", driver.navigate(url, wait), 40)
+                result["probes"][key] = _parse(
+                    await _guard(key, driver.evaluate(_wrap(probe)), probe_to)
+                )
+        if not skip_detection:
+            for key, url, wait, probe, probe_to in DETECTION_SITES:
+                await _guard(f"nav {key}", driver.navigate(url, wait), 40)
+                result["probes"][key] = _parse(
+                    await _guard(key, driver.evaluate(_wrap(probe)), probe_to)
+                )
+        if not skip_captcha:
+            for key, url, wait, probe, probe_to in CAPTCHA_SITES:
                 await _guard(f"nav {key}", driver.navigate(url, wait), 40)
                 result["probes"][key] = _parse(
                     await _guard(key, driver.evaluate(_wrap(probe)), probe_to)
@@ -903,6 +919,43 @@ def _flatten(result: dict) -> dict[str, Any]:
     if isinstance(bl_tls, dict) and bl_tls.get("ready"):
         out["bl_ja3"] = (bl_tls.get("ja3") or "")[:16] or None
         out["bl_ja4"] = (bl_tls.get("ja4") or "")[:24] or None
+    bs = result.get("probes", {}).get("browserscan") or {}
+    if isinstance(bs, dict) and bs.get("ready"):
+        out["bs_overall"] = bs.get("overall")
+        out["bs_normal"] = f"{bs.get('testsNormal')}/{bs.get('testsTotal')}"
+        if bs.get("testsFailed"):
+            out["bs_failed"] = bs.get("testsFailed")
+    inc = result.get("probes", {}).get("incolumitas") or {}
+    if isinstance(inc, dict) and inc.get("ready"):
+        out["inc_fails"] = inc.get("totalFailCount")
+        if inc.get("newFails"):
+            out["inc_newFails"] = inc.get("newFails")
+        if inc.get("behavioralScore") is not None:
+            out["inc_behScore"] = inc.get("behavioralScore")
+    elif isinstance(inc, dict) and inc:
+        out["inc_fails"] = inc.get("error") or inc.get("__timeout__") or inc.get("__error__")
+    px = result.get("probes", {}).get("pixelscan") or {}
+    if isinstance(px, dict) and px.get("ready"):
+        out["px_verdict"] = px.get("overall")
+        out["px_clear"] = f"{px.get('categoriesClear')}/{px.get('categoriesTotal')}"
+    iphey = result.get("probes", {}).get("iphey") or {}
+    if isinstance(iphey, dict) and iphey.get("ready"):
+        out["iphey_overall"] = iphey.get("overall")
+        if iphey.get("errorTiles"):
+            out["iphey_bad"] = iphey.get("errorTiles")
+    rc = result.get("probes", {}).get("recaptcha_v3") or {}
+    if isinstance(rc, dict) and rc.get("ready"):
+        out["rc_v3_score"] = rc.get("score")
+        out["rc_v3_passed"] = rc.get("passed")
+    elif isinstance(rc, dict) and rc:
+        out["rc_v3_score"] = rc.get("error") or rc.get("__timeout__") or rc.get("__error__") or "n/a"
+    ts = result.get("probes", {}).get("turnstile") or {}
+    if isinstance(ts, dict) and ts.get("ready"):
+        out["ts_passed"] = ts.get("passed")
+        out["ts_auto"] = ts.get("autoResolved")
+        out["ts_challenge"] = ts.get("challengePresent")
+    elif isinstance(ts, dict) and ts:
+        out["ts_passed"] = ts.get("error") or ts.get("__timeout__") or ts.get("__error__") or "n/a"
     return out
 
 
@@ -964,6 +1017,16 @@ def main() -> None:
         "--skip-browserleaks",
         action="store_true",
         help="Skip the BrowserLeaks sub-test suite (~60s across six pages).",
+    )
+    ap.add_argument(
+        "--skip-detection",
+        action="store_true",
+        help="Skip extended detection sites (BrowserScan, incolumitas, Pixelscan, iphey).",
+    )
+    ap.add_argument(
+        "--skip-captcha",
+        action="store_true",
+        help="Skip captcha presentation/pass probes (reCAPTCHA v3, Turnstile).",
     )
     ap.add_argument(
         "--fingerprint",
@@ -1036,6 +1099,8 @@ def main() -> None:
             args.label,
             skip_fpcom=args.skip_fpcom,
             skip_browserleaks=args.skip_browserleaks,
+            skip_detection=args.skip_detection,
+            skip_captcha=args.skip_captcha,
             fingerprint=fingerprint,
             align_to_proxy=args.align_to_proxy,
             webrtc=args.webrtc_mode,
