@@ -162,12 +162,23 @@ IPHEY_PROBE = _probe(r"""
       error: a.classList.contains('code-block--error'),
     }))
     .filter((t) => t.label);
+  const errorTiles = tiles.filter((t) => t.error).map((t) => t.label);
+  // LOCATION tile errors are geo-permission issues (expected on headless/VPS),
+  // not browser fingerprint failures. Separate them from real detection flags.
+  const fingerprintTiles = ['BROWSER', 'HARDWARE', 'SOFTWARE'];
+  const fpErrors = errorTiles.filter((t) => fingerprintTiles.includes(t));
+  const geoErrors = errorTiles.filter((t) => !fingerprintTiles.includes(t));
+  // "Reliable" from a fingerprint perspective if BROWSER/HARDWARE/SOFTWARE pass
+  const fpClean = fpErrors.length === 0;
   return {
     ready: true,
     overall,
     isReliable: /reliable/i.test(overall) && !/unreliable/i.test(overall),
+    fingerprintClean: fpClean,
     tiles,
-    errorTiles: tiles.filter((t) => t.error).map((t) => t.label),
+    errorTiles,
+    fingerprintErrors: fpErrors,
+    geoErrors,
   };
 """)
 

@@ -479,6 +479,16 @@ class BridgeDriver:
             tab.remove_handler(cdp.network.ResponseReceived, on_response)
             tab.remove_handler(cdp.network.LoadingFinished, on_finished)
 
+    async def solve_turnstile(self, timeout: float = 15.0, retries: int = 5) -> dict:
+        """Attempt to solve a Cloudflare Turnstile challenge via click."""
+        if hasattr(self.b, "solve_cloudflare"):
+            return await self.b.solve_cloudflare(
+                timeout_seconds=timeout, max_retries=retries,
+            )
+        if hasattr(self.b, "tab") and callable(getattr(self.b.tab, "verify_cf", None)):
+            return await self.b.tab.verify_cf()
+        return {"solved": False, "error": "no solver available"}
+
     async def close(self) -> None:
         if self.b is not None:
             await self.b.close()
@@ -749,6 +759,11 @@ async def run(
         if not skip_captcha:
             for key, url, wait, probe, probe_to in CAPTCHA_SITES:
                 await _guard(f"nav {key}", driver.navigate(url, wait), 40)
+                if key == "turnstile" and hasattr(driver, "solve_turnstile"):
+                    try:
+                        await _guard("solve_turnstile", driver.solve_turnstile(), 30)
+                    except Exception:  # noqa: BLE001
+                        pass
                 result["probes"][key] = _parse(
                     await _guard(key, driver.evaluate(_wrap(probe)), probe_to)
                 )
@@ -941,8 +956,13 @@ def _flatten(result: dict) -> dict[str, Any]:
     iphey = result.get("probes", {}).get("iphey") or {}
     if isinstance(iphey, dict) and iphey.get("ready"):
         out["iphey_overall"] = iphey.get("overall")
-        if iphey.get("errorTiles"):
-            out["iphey_bad"] = iphey.get("errorTiles")
+        out["iphey_fp_clean"] = iphey.get("fingerprintClean")
+        fp_errs = iphey.get("fingerprintErrors") or []
+        if fp_errs:
+            out["iphey_fp_bad"] = fp_errs
+        geo_errs = iphey.get("geoErrors") or []
+        if geo_errs:
+            out["iphey_geo_errs"] = geo_errs
     rc = result.get("probes", {}).get("recaptcha_v3") or {}
     if isinstance(rc, dict) and rc.get("ready"):
         out["rc_v3_score"] = rc.get("score")
