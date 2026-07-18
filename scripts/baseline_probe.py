@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
@@ -69,6 +70,7 @@ from mithwire.stealth_diagnostic.probes import (  # noqa: E402
     wrap as _wrap,
     parse as _parse,
 )
+from browserleaks_probes import BROWSERLEAKS_SITES  # noqa: E402
 
 # fingerprint.com (Fingerprint Pro) computes its verdict server-side and POSTs it
 # to /api/event/v4/<id>. Originally we captured that response PASSIVELY via CDP
@@ -370,9 +372,11 @@ class BridgeDriver:
         fingerprint: dict | None = None,
         align_to_proxy: bool = False,
         webrtc: str | None = None,
+        engine: str = "stock",
     ) -> None:
         self.headless = headless
         self.proxy = proxy
+        self.engine = engine
         # WebRTC leak-protection mode override (auto/filter/disable/off); None
         # lets BridgeBrowser use its default ("auto" -> filter when proxied).
         self.webrtc = webrtc
@@ -386,12 +390,17 @@ class BridgeDriver:
         self.b: Any = None
 
     async def start(self) -> None:
+        if not self.headless:
+            from mithwire_mcp.virtual_display import ensure_virtual_display
+
+            ensure_virtual_display()
         from mithwire_mcp.browser import BridgeBrowser
         from mithwire_mcp.proxy import parse_proxy
 
         kwargs: dict[str, Any] = {"headless": self.headless, "proxy": parse_proxy(self.proxy)}
         if self.webrtc:
             kwargs["webrtc_leak_protection"] = self.webrtc
+        kwargs["engine"] = self.engine
         if self.fingerprint:
             # Imported from the same checkout as BridgeBrowser (honors --package-dir).
             from mithwire_mcp.fingerprint import FingerprintConfig
@@ -666,9 +675,11 @@ async def run(
     label: str,
     *,
     skip_fpcom: bool = False,
+    skip_browserleaks: bool = False,
     fingerprint: dict | None = None,
     align_to_proxy: bool = False,
     webrtc: str | None = None,
+    engine: str = "stock",
 ) -> dict:
     # Spoofing, proxy alignment, and WebRTC leak protection are MCP-layer
     # features -- only the bridge driver can exercise them. The raw and
@@ -683,13 +694,14 @@ async def run(
     else:
         driver = BridgeDriver(
             headless=headless, proxy=proxy, fingerprint=fingerprint,
-            align_to_proxy=align, webrtc=webrtc,
+            align_to_proxy=align, webrtc=webrtc, engine=engine,
         )
 
     result: dict[str, Any] = {
         "label": label,
         "driver": driver_kind,
         "headless": headless,
+        "engine": engine if driver_kind == "bridge" else None,
         "proxy": bool(proxy),
         "spoof": spoof,
         "align_to_proxy": align,
@@ -718,6 +730,12 @@ async def run(
         result["probes"]["webrtc"] = _parse(
             await _guard("webrtc", driver.evaluate(_wrap(WEBRTC_PROBE)), 15)
         )
+        if not skip_browserleaks:
+            for key, url, wait, probe, probe_to in BROWSERLEAKS_SITES:
+                await _guard(f"nav {key}", driver.navigate(url, wait), 40)
+                result["probes"][key] = _parse(
+                    await _guard(key, driver.evaluate(_wrap(probe)), probe_to)
+                )
         # fingerprint.com: read the rendered Smart Signals JSON from the DOM.
         # Was a passive CDP body capture, but Fingerprint Pro now serves the
         # /api/event/v4/ POST from an OOPIF/SW that the top-frame session can't
@@ -853,6 +871,38 @@ def _flatten(result: dict) -> dict[str, Any]:
             out["fp_incognito"] = fp.get("incognito")
         else:
             out["fp_bot"] = fp.get("error") or fp.get("__timeout__") or fp.get("__error__") or "n/a"
+    bl_js = result.get("probes", {}).get("browserleaks_javascript") or {}
+    if isinstance(bl_js, dict) and bl_js.get("ready"):
+        out["bl_webdriver"] = bl_js.get("webdriver")
+        out["bl_platform"] = bl_js.get("platform")
+        conn = bl_js.get("connection") or {}
+        if isinstance(conn, dict):
+            out["bl_conn"] = f"rtt={conn.get('rtt')} downlink={conn.get('downlink')} type={conn.get('effectiveType')}"
+        out["bl_speech_voices"] = bl_js.get("speechVoicesCount")
+        scr = bl_js.get("screenResolution")
+        if scr:
+            out["bl_screen"] = scr
+    bl_canvas = result.get("probes", {}).get("browserleaks_canvas") or {}
+    if isinstance(bl_canvas, dict) and bl_canvas.get("ready"):
+        out["bl_canvas_hash"] = (bl_canvas.get("signature") or "")[:16] or None
+    bl_wgl = result.get("probes", {}).get("browserleaks_webgl") or {}
+    if isinstance(bl_wgl, dict) and bl_wgl.get("ready"):
+        out["bl_webgl_supported"] = bl_wgl.get("webglSupported")
+        out["bl_webgl_vendor"] = bl_wgl.get("unmaskedVendor")
+        out["bl_webgl_renderer"] = (bl_wgl.get("unmaskedRenderer") or "")[:40] or None
+        out["bl_webgl_hash"] = (bl_wgl.get("reportHash") or "")[:16] or None
+    bl_wrtc = result.get("probes", {}).get("browserleaks_webrtc") or {}
+    if isinstance(bl_wrtc, dict) and bl_wrtc.get("ready"):
+        out["bl_webrtc_leak"] = bl_wrtc.get("leakTest") or bl_wrtc.get("webrtcLeak")
+        out["bl_webrtc_public"] = bl_wrtc.get("publicIp")
+    bl_fonts = result.get("probes", {}).get("browserleaks_fonts") or {}
+    if isinstance(bl_fonts, dict) and bl_fonts.get("ready"):
+        out["bl_font_count"] = bl_fonts.get("fontCount")
+        out["bl_fonts_hash"] = (bl_fonts.get("metricsHash") or "")[:16] or None
+    bl_tls = result.get("probes", {}).get("browserleaks_tls") or {}
+    if isinstance(bl_tls, dict) and bl_tls.get("ready"):
+        out["bl_ja3"] = (bl_tls.get("ja3") or "")[:16] or None
+        out["bl_ja4"] = (bl_tls.get("ja4") or "")[:24] or None
     return out
 
 
@@ -911,6 +961,11 @@ def main() -> None:
         "commercial API and adds ~18s).",
     )
     ap.add_argument(
+        "--skip-browserleaks",
+        action="store_true",
+        help="Skip the BrowserLeaks sub-test suite (~60s across six pages).",
+    )
+    ap.add_argument(
         "--fingerprint",
         default=None,
         metavar="PATH",
@@ -940,6 +995,12 @@ def main() -> None:
             "makes) so the browser timezone is pinned to the egress IP. Requires "
             "--proxy and --driver bridge; otherwise a no-op."
         ),
+    )
+    ap.add_argument(
+        "--engine",
+        choices=["stock", "stealth"],
+        default="stock",
+        help="BridgeBrowser engine (stealth uses CloakBrowser on Linux with Xvfb when headful). Bridge-only.",
     )
     ap.add_argument(
         "--package-dir",
@@ -974,9 +1035,11 @@ def main() -> None:
             args.proxy,
             args.label,
             skip_fpcom=args.skip_fpcom,
+            skip_browserleaks=args.skip_browserleaks,
             fingerprint=fingerprint,
             align_to_proxy=args.align_to_proxy,
             webrtc=args.webrtc_mode,
+            engine=args.engine,
         )
     )
     text = json.dumps(result, indent=2, default=str)

@@ -228,3 +228,98 @@ result to exist and never depend on guessing how long a site takes.
   depth gap) + the pre-existing headless **Navigator** worker lie. NB: the
   preamble must use LOCAL per-fn toString masking, never a global
   `Function.prototype.toString` override (the latter cascades to ~9 lies).
+
+## BrowserLeaks — `https://browserleaks.com/`
+
+Multi-page fingerprinting suite. Each sub-test is a separate URL with stable
+DOM anchors; results are rendered client-side into tables (no XHR JSON API for
+the stealth signals we care about). Probes live in
+``scripts/browserleaks_probes.py`` and run from ``baseline_probe.py`` after the
+core gate sites (gate with ``--skip-browserleaks``).
+
+General parse notes:
+
+- BrowserLeaks decorates boolean cells with ``✔\\nTrue`` / ``✖\\nFalse`` and
+  sometimes a leading ``!`` on warning values. Strip leading checkmarks,
+  whitespace, and ``!`` before comparing — never match the raw ``innerText``.
+- Prefer **stable element ids** over free-text body regexes.
+
+### JavaScript — `/javascript`
+
+- **How produced:** client-side JS populates ``tbody`` sections after load.
+- **Robust parse:** gate on ``#navigator-tbody`` containing a row whose first
+  cell is ``webdriver`` with a non-empty second cell. Map the tbody to a dict
+  (``userAgent``, ``platform``, ``webdriver``, ``hardwareConcurrency``,
+  ``deviceMemory``, ``languages``). Connection API values live in generic table
+  rows keyed ``effectiveType``, ``downlink``, ``rtt``, ``saveData`` (not inside
+  the navigator tbody). Speech voices: ``#speech-tbody`` row ``Speech Voices`` —
+  split the second cell on newlines and count.
+- **Readiness:** ``#navigator-tbody tr`` with ``webdriver`` populated (~20 s cap).
+- **Signals:** ``webdriver``, ``platform``, ``userAgent``, screen/window dims
+  (``Screen Resolution``, ``window.innerWidth/innerHeight``), ``connection.*``,
+  ``speechVoicesCount``.
+
+### Canvas — `/canvas`
+
+- **How produced:** inline JS draws to canvas and hashes ``toDataURL`` output.
+- **Robust parse:** ``#canvas-hash`` (a ``<td>``) **or** the ``Signature`` row
+  in ``#canvas-data``. Both carry the same 32-char hex MD5-style signature.
+- **Readiness:** ``#canvas-hash`` matches ``/^[0-9A-Fa-f]{32}$/`` (~15 s cap).
+- **Signals:** ``signature`` (canvas fingerprint hash).
+
+### WebGL — `/webgl`
+
+- **How produced:** client-side WebGL parameter dump + image hash.
+- **Robust parse:** ``#UNMASKED_VENDOR_WEBGL`` and ``#UNMASKED_RENDERER_WEBGL``
+  for the stealth-relevant GPU strings; ``#gl-report-hash`` /
+  ``#gl-image-hash`` for fingerprint hashes. Masked vendor/renderer:
+  ``#VENDOR`` / ``#RENDERER``.
+- **Readiness:** unmasked vendor **and** renderer both non-empty and not ``-``
+  (~20 s cap — the report table fills progressively). If the support row reads
+  ``False (supported, but disabled or unavailable)`` (common on CloakBrowser /
+  ``engine=stealth``), treat that as ready with ``webglSupported: false`` —
+  do not wait forever for unmasked strings that will never populate.
+- **Signals:** ``webglSupported``, ``unmaskedVendor``, ``unmaskedRenderer``,
+  ``reportHash``, ``imageHash``.
+
+### WebRTC — `/webrtc`
+
+- **How produced:** page runs its own ICE gathering and compares remote vs
+  WebRTC-derived IPs.
+- **Robust parse:** ``#client-ipv4`` (HTTP remote IP), ``#rtc-local``,
+  ``#rtc-public`` (WebRTC-derived), plus the ``WebRTC Leak Test`` row verdict
+  (``No Leak`` vs a leak indicator). Treat ``-`` as absent.
+- **Readiness:** ``WebRTC Leak Test`` row **or** ``#rtc-public`` populated
+  (~18 s cap).
+- **Signals:** ``remoteIpv4``, ``localIp``, ``publicIp``, ``leakTest``,
+  ``webrtcLeak`` (bool: ``/leak/i`` but not ``/no leak/i``).
+- **Note:** this is informational alongside the harness's dedicated
+  ``WEBRTC_PROBE`` (which waits for ICE ``complete``). BrowserLeaks compares
+  against its server-seen IP; use both for cross-checking.
+
+### Fonts — `/fonts`
+
+- **How produced:** brute-force font metrics + Unicode glyph measurement.
+- **Robust parse:** ``#fonts-metrics-hash`` (metrics fingerprint),
+  ``#fonts-metrics-report`` (human summary like ``359 fonts and 241 unique
+  metrics found``), ``#fonts-glyphs-hash``.
+- **Readiness:** ``#fonts-metrics-report`` matches ``/\\d+ fonts/`` (~25 s cap —
+  font enumeration is slow).
+- **Signals:** ``metricsHash``, ``fontCount``, ``uniqueMetrics``, ``glyphsHash``.
+
+### TLS — `/tls`
+
+- **How produced:** **server-side** TLS ClientHello capture on connect; BrowserLeaks
+  renders JA3/JA4 into the DOM after the handshake completes.
+- **Robust parse:** ``#ja3_hash``, ``#ja4``, ``#ja4_r`` (element ids are stable).
+  Optional: ``#ja3n_hash`` for normalized JA3.
+- **Readiness:** ``#ja3_hash`` is a 32-char hex string (~15 s cap).
+- **Signals:** ``ja3``, ``ja4``, ``ja4_r``, ``tls13`` enabled flag.
+
+### Other pages (not probed)
+
+Features Detection, Client Hints, Content Filters, IP/geolocation, WebGPU,
+HTTP/2, TCP, QUIC, and DNS tests are useful manually but overlap with signals
+already captured (navigator probe, api.ipapi.is) or are network-stack probes
+outside the browser fingerprint layer. Add them if a regression specifically
+targets those layers.
