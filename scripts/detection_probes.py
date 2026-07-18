@@ -146,16 +146,22 @@ PIXELSCAN_PROBE = _probe(r"""
 """)
 
 OVP_PROBE = _probe(r"""
-  // Wait for the page to render results (either public demo or API-key demo).
-  const hasResult = () => /Bot Score|"botScore"/i.test(document.body.innerText);
+  // Wait for the page to compute a result. The API-key demo shows a
+  // clusterUUID card once the API call returns; the public demo renders
+  // the JSON inline. Poll until either signal appears.
+  const hasResult = () => {
+    const t = document.body.innerText;
+    return /clusterUUID\s*\/\s*Browser Identifier\n[A-Z0-9-]{10,}/i.test(t)
+      || /"botScore"\s*:\s*\d/.test(t);
+  };
   const deadline = Date.now() + 25000;
   while (Date.now() < deadline && !hasResult()) { await sleep(400); }
-  if (!hasResult()) return { ready: false, error: 'no-bot-score' };
+  if (!hasResult()) return { ready: false, error: 'no-result' };
 
   // API-key demo hides JSON behind a "SHOW JSON" button — click to reveal.
   const showBtn = [...document.querySelectorAll('button')]
     .find((b) => /show json/i.test(b.innerText));
-  if (showBtn) { showBtn.click(); await sleep(600); }
+  if (showBtn) { showBtn.click(); await sleep(800); }
 
   const body = document.body.innerText;
 
