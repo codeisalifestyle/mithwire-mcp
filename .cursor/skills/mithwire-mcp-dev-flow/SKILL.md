@@ -199,6 +199,46 @@ main checkout's `.venv/bin/mithwire-mcp` to a
 `uvx mithwire-mcp` invocation. That's a one-config-edit migration; the rest
 of the architecture is unchanged.
 
+## CI pipeline
+
+Both repos use GitHub Actions with branch protection on `main`.
+
+### mithwire (engine) — `.github/workflows/ci.yml`
+
+Single job, no Chrome needed. All tests use mocks/stubs (connect-retry,
+compute_launch_args, stealth-diagnostic grading + CLI). Runs on every push
+to `main` and every PR.
+
+| Job | Timeout | What it runs |
+| --- | --- | --- |
+| Unit tests (no Chrome) | 5 min | `uv run pytest -v` |
+
+### mithwire-mcp — `.github/workflows/ci.yml`
+
+Three jobs, gated sequentially. Branch protection requires all three to
+pass before merging to `main`.
+
+| Job | Timeout | What it runs |
+| --- | --- | --- |
+| **Lint & unit tests (no Chrome)** | 5 min | `ruff check .` then `pytest -m 'not stealth_e2e' --maxfail=1` |
+| **Stealth e2e (real Chrome)** | 10 min | `pytest tests/test_fingerprint_application.py` — spawns a real Chrome via BridgeBrowser, validates FingerprintConfig fields reach the browser |
+| **Anti-detect matrix (stealth engine)** | 15 min | `profile_matrix.py` with CloakBrowser stealth engine, linux-* profiles only. **Pass = DAB reports HUMAN AND sannysoft shows 0 failed cells** for every profile. CreepJS / fingerprint.com are informational. Third-party sites, BrowserLeaks, captcha, and IP-quality probes are skipped (flaky external deps). |
+
+The detection-matrix installs system libs (fonts, Chromium shared libs)
+but NOT system Chrome — CloakBrowser provides its own binary, cached at
+`~/.cloakbrowser` with `actions/cache@v4`.
+
+### Branch protection (mithwire-mcp)
+
+Required status checks (must match CI job names exactly):
+
+- `Lint & unit tests (no Chrome)`
+- `Stealth e2e (real Chrome)`
+- `Anti-detect matrix (stealth engine)`
+
+If you rename a CI job, update the required checks in repo Settings →
+Branches → `main` → Edit, or PRs will be blocked by a stale check name.
+
 ## Releasing (release-please + Trusted Publishing)
 
 Both repos publish to PyPI the same way. Code on `main` is allowed to be
@@ -207,9 +247,16 @@ not a defect. The pipeline guarantees traceability instead of
 synchronicity: every PyPI version maps to a tagged commit, and the
 version in `pyproject.toml` at that tag equals the tag.
 
-How it flows (all of it lives in `.github/workflows/release.yml`, because
-PyPI Trusted Publishing matches the OIDC token against that exact workflow
-filename + environment — the upload step can't move to another file):
+Everything lives in `.github/workflows/release.yml` — PyPI Trusted
+Publishing matches the OIDC token against that exact workflow filename +
+environment, so the upload step can't move to another file. The Docker
+image build also lives here (not in a separate workflow) because
+release-please creates tags with `GITHUB_TOKEN`, and GitHub suppresses
+workflow triggers from `GITHUB_TOKEN`-authored events — a standalone
+push-tag-triggered `docker.yml` would silently skip on release-please
+releases.
+
+How it flows:
 
 1. **You push conventional commits to `main`** (via PR; CI gates the merge).
 2. **`release-please` opens/updates a release PR** — it computes the next
@@ -220,9 +267,14 @@ filename + environment — the upload step can't move to another file):
    trigger a release.
 3. **You merge the release PR when you decide it's time.** That merge is a
    push to `main`, so the same `release.yml` run: release-please creates the
-   tag + GitHub Release, then the `build` → `testpypi` → `pypi` jobs run.
-   `pypi` is gated on a non-prerelease version and carries the manual
-   approval gate via the `pypi` environment.
+   tag + GitHub Release, then the downstream jobs run:
+   `build` → `testpypi` + `pypi` + `docker` (in parallel after build).
+   `pypi` is gated on a non-prerelease version. Docker runs on stable
+   releases and tag-replay dispatches only (not dry runs).
+
+All publishing (TestPyPI, PyPI, Docker GHCR) is fully automated — no
+manual approval gates. The `testpypi` and `pypi` GitHub environments
+have no required reviewers.
 
 Dry-run the publish chain without cutting a release — Actions tab → the
 `release` workflow → **Run workflow**. That builds a throwaway
@@ -234,16 +286,21 @@ One-time setup per package (no API for this — web UI only):
 - TestPyPI: https://test.pypi.org/manage/account/publishing/ — add a
   pending publisher (owner, repo, workflow `release.yml`, environment
   `testpypi`).
-- PyPI (only when ready for prod): same form at pypi.org, environment
-  `pypi`.
-- GitHub: create environments `testpypi` (no gate) and `pypi` (required
-  reviewer = you) under repo Settings → Environments.
+- PyPI: same form at pypi.org, environment `pypi`.
+- GitHub: create environments `testpypi` and `pypi` (both with no gate)
+  under repo Settings → Environments.
 
-To make merging the release PR auto-publish without any manual tag push,
-release-please's tag must trigger downstream — but tags pushed by
-`GITHUB_TOKEN` don't trigger other workflows. We sidestep that by keeping
-the publish jobs in the SAME `release.yml` run as release-please (gated on
-its `release_created` output), so no PAT is needed.
+### release.yml job inventory (mithwire-mcp)
+
+| Job | Timeout | Trigger condition |
+| --- | --- | --- |
+| **Release PR / tag** | 10 min | push to main only |
+| **Build distribution** | 10 min | release_created OR any dispatch |
+| **Publish to TestPyPI** | 10 min | after successful build (always) |
+| **Publish to PyPI** | 10 min | after successful build, non-prerelease only |
+| **Docker image (GHCR)** | 30 min | release_created OR tag-replay dispatch |
+
+The engine repo's `release.yml` is identical except it has no Docker job.
 
 ### Engine releases (cross-repo coordination)
 
