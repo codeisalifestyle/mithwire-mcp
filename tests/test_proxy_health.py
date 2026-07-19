@@ -14,8 +14,8 @@ import base64
 import json
 import threading
 import unittest
+from collections.abc import Awaitable, Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Awaitable, Callable
 
 from mithwire_mcp.proxy import ProxyConfig
 from mithwire_mcp.proxy_health import (
@@ -25,7 +25,6 @@ from mithwire_mcp.proxy_health import (
     probe_proxy,
     trigger_rotation,
 )
-
 
 _IPAPI_PAYLOAD = {
     "ip": "203.0.113.42",
@@ -79,7 +78,7 @@ class FakeProxy:
         self.port: int = 0
         self.last_request: bytes = b""
 
-    async def __aenter__(self) -> "FakeProxy":
+    async def __aenter__(self) -> FakeProxy:
         await self.start()
         return self
 
@@ -255,7 +254,7 @@ class _RotationHandler(BaseHTTPRequestHandler):
     """Captures the request and returns whatever the test set on the server."""
 
     def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
-        server: "_RotationServer" = self.server  # type: ignore[assignment]
+        server: _RotationServer = self.server  # type: ignore[assignment]
         server.last_path = self.path
         server.last_headers = dict(self.headers.items())
         status, body, content_type = server.next_response

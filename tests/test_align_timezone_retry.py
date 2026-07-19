@@ -74,7 +74,7 @@ class _PatchedAligner:
         self.browser = browser
         self.applied: list[str] = []
 
-    def __enter__(self) -> "_PatchedAligner":
+    def __enter__(self) -> _PatchedAligner:
         async def _apply(tz: str) -> None:
             self.applied.append(tz)
 

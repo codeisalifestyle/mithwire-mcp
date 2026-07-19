@@ -8,7 +8,6 @@ import stat
 import sys
 import tempfile
 import unittest
-from pathlib import Path
 
 from mithwire_mcp.state_store import BrowserStateStore
 

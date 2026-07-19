@@ -61,7 +61,7 @@ class _LegacyState:
     default_present: bool
 
     @classmethod
-    def capture(cls, state_root: Path) -> "_LegacyState":
+    def capture(cls, state_root: Path) -> _LegacyState:
         configs_dir = state_root / "configs"
         legacy_configs = (
             sorted(p.stem for p in configs_dir.glob("*.json"))
@@ -396,11 +396,12 @@ def _run_migration(
     if state_root:
         original_root = Path(state_root).expanduser().resolve()
     else:
+        import os
+
         from .state_store import (
             DEFAULT_STATE_ROOT_DIRNAME,
             STATE_ROOT_ENV_VAR,
         )
-        import os
 
         env = (os.getenv(STATE_ROOT_ENV_VAR) or "").strip()
         if env:

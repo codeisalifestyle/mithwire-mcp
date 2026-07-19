@@ -23,7 +23,6 @@ import logging
 import platform
 import random
 import sys
-from typing import Any
 
 from .fingerprint import FingerprintConfig
 from .proxy import ProxyConfig

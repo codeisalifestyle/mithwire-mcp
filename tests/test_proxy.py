@@ -206,7 +206,7 @@ class ProxyRotationUrlTest(unittest.TestCase):
                 "server": "http://1.2.3.4:8080",
                 "rotation_url": (
                     "https://api.falconproxy.com/staging/v1/rotate/"
-                    "rt_acbc3a4651292e507db5b9439882fa97"
+                    "rt_00000000000000000000000000000000"
                 ),
             }
         )

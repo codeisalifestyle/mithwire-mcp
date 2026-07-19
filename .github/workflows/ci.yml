@@ -1,9 +1,5 @@
 name: CI
 
-# Triggers and concurrency:
-# - Every push to main + every PR against main runs the full pipeline.
-# - In-flight runs for the same ref are cancelled when a newer push lands,
-#   so a developer rapidly amending a PR does not stack up CI minutes.
 on:
   push:
     branches: [main]
@@ -18,49 +14,31 @@ concurrency:
 permissions:
   contents: read
 
-# Reusable parts are inlined per-job rather than factored into a composite
-# action: the workflow is short, factoring obscures the actual setup steps
-# from a reader scanning the CI for what runs, and three slightly different
-# jobs would each need their own composite override anyway.
-
 jobs:
   # -----------------------------------------------------------------------
-  # 1. Fast unit tests -- no Chrome. Layer A + the existing test_proxy /
-  #    test_runtime / test_align_timezone_retry / etc. suites. This is the
-  #    gate we want every PR to clear in under a minute so iteration stays
-  #    cheap. Anything tagged ``stealth_e2e`` is excluded (those need Chrome).
+  # 1. Lint + fast unit tests -- no Chrome.  Anything tagged
+  #    ``stealth_e2e`` is excluded (those need a real browser).
   # -----------------------------------------------------------------------
   unit-fast:
-    name: Unit tests (no Chrome)
+    name: Lint & unit tests (no Chrome)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Check out engine (satisfies [tool.uv.sources] = ../mithwire)
-        uses: actions/checkout@v4
-        with:
-          repository: codeisalifestyle/mithwire
-          path: mithwire
-      - name: Check out MCP
-        uses: actions/checkout@v4
-        with:
-          path: mithwire-mcp
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          cache-dependency-glob: mithwire-mcp/uv.lock
+          cache-dependency-glob: pyproject.toml
       - name: Install Python + dependencies
-        working-directory: mithwire-mcp
         run: uv sync --group dev
+      - name: Lint
+        run: uv run ruff check .
       - name: Run fast unit tests
-        working-directory: mithwire-mcp
         run: uv run pytest -m 'not stealth_e2e' --maxfail=1
 
   # -----------------------------------------------------------------------
-  # 2. Stealth e2e tests -- spawn a real Chrome via BridgeBrowser and read
-  #    the live navigator surface (Layer A: ``test_fingerprint_application``).
-  #    Validates that every FingerprintConfig field actually reaches the
-  #    browser. Tagged ``stealth_e2e`` so it is opt-in for the fast lane.
+  # 2. Stealth e2e -- spawn a real Chrome via BridgeBrowser and verify
+  #    that every FingerprintConfig field reaches the browser.
   # -----------------------------------------------------------------------
   e2e-application:
     name: Stealth e2e (real Chrome)
@@ -68,29 +46,12 @@ jobs:
     needs: unit-fast
     timeout-minutes: 10
     steps:
-      - name: Check out engine
-        uses: actions/checkout@v4
-        with:
-          repository: codeisalifestyle/mithwire
-          path: mithwire
-      - name: Check out MCP
-        uses: actions/checkout@v4
-        with:
-          path: mithwire-mcp
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          cache-dependency-glob: mithwire-mcp/uv.lock
+          cache-dependency-glob: pyproject.toml
       - name: Allow unprivileged user namespaces (Ubuntu 24.04 AppArmor)
-        # GHA's ubuntu-latest is 24.04, whose AppArmor profile restricts
-        # unprivileged user namespaces -- which is exactly what Chrome's
-        # sandbox needs to fork its zygote. Without this, ``uc.start()``
-        # raises "Failed to start the browser process". We intentionally
-        # do NOT pass ``--no-sandbox``: that flag is trivially fingerprinted
-        # by anti-bot stacks and would make CI test a worse browser than
-        # production. Loosening the AppArmor restriction is the official
-        # Chromium workaround for this exact runner config.
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install Chrome
         id: setup-chrome
@@ -98,31 +59,23 @@ jobs:
         with:
           chrome-version: stable
       - name: Install Python + dependencies
-        working-directory: mithwire-mcp
         run: uv sync --group dev
       - name: Run stealth e2e tests
-        working-directory: mithwire-mcp
         env:
-          # setup-chrome exposes the binary path; pass it through to the
-          # ``_chrome_available`` resolver in tests so we never accidentally
-          # pick a hidden host-default Chrome instead of the pinned one.
           CHROME: ${{ steps.setup-chrome.outputs.chrome-path }}
-        run: uv run pytest tests/test_fingerprint_application.py -v
+        run: uv run pytest tests/test_fingerprint_application.py -v --maxfail=1
 
   # -----------------------------------------------------------------------
-  # 3. Anti-detect matrix -- the product-level gate. Uses the stealth
-  #    engine (CloakBrowser) on Linux, which is the production deployment
-  #    path for VPS workloads. Only linux-* profiles are tested (the host
-  #    OS matches the profile OS, yielding the cleanest signal).
+  # 3. Anti-detect matrix -- the product-level gate.  Uses the stealth
+  #    engine (CloakBrowser) on Linux with linux-* profiles only.
   #
-  #    CI pass definition: deviceandbrowserinfo.com /are_you_a_bot reports
-  #    HUMAN for every profile AND sannysoft shows 0 failed cells. CreepJS
-  #    and fingerprint.com are informational only.
+  #    CI pass definition (both must hold for every profile):
+  #      - deviceandbrowserinfo.com /are_you_a_bot: HUMAN
+  #      - sannysoft: 0 failed cells (warns allowed)
   #
-  #    Third-party detection sites (BrowserScan, incolumitas, pixelscan),
-  #    BrowserLeaks, captcha probes, and IP-quality sites are skipped to
-  #    keep CI fast and deterministic (no flaky external dependencies
-  #    beyond the two gate sites).
+  #    CreepJS and fingerprint.com are informational only.
+  #    Third-party detection sites, BrowserLeaks, captcha, and IP-quality
+  #    probes are skipped (flaky external deps, not gate sites).
   # -----------------------------------------------------------------------
   detection-matrix:
     name: Anti-detect matrix (stealth engine)
@@ -130,24 +83,12 @@ jobs:
     needs: unit-fast
     timeout-minutes: 15
     steps:
-      - name: Check out engine
-        uses: actions/checkout@v4
-        with:
-          repository: codeisalifestyle/mithwire
-          path: mithwire
-      - name: Check out MCP
-        uses: actions/checkout@v4
-        with:
-          path: mithwire-mcp
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          cache-dependency-glob: mithwire-mcp/uv.lock
+          cache-dependency-glob: pyproject.toml
       - name: Install system dependencies
-        # CloakBrowser needs the same shared libs as Chromium. Fonts keep
-        # the fingerprint realistic. No setup-chrome step — stealth mode
-        # uses the CloakBrowser binary, not system Chrome.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -160,20 +101,17 @@ jobs:
             libxcomposite1 \
             libxdamage1 \
             libxrandr2 \
-            libasound2t64 \
-            xvfb
+            libasound2t64
       - name: Install Python + dependencies (with stealth extra)
-        working-directory: mithwire-mcp
         run: uv sync --group dev --extra stealth
       - name: Cache CloakBrowser binary
         uses: actions/cache@v4
         with:
           path: ~/.cloakbrowser
-          key: cloakbrowser-${{ runner.os }}-${{ hashFiles('mithwire-mcp/pyproject.toml') }}
+          key: cloakbrowser-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: cloakbrowser-${{ runner.os }}-
       - name: Run anti-detect matrix (stealth engine, linux profiles)
         id: matrix
-        working-directory: mithwire-mcp
         run: |
           uv run python scripts/profile_matrix.py \
             --driver bridge \
@@ -192,8 +130,8 @@ jobs:
           {
             echo "## Anti-detect matrix (stealth engine)"
             echo ""
-            echo "**CI pass definition:** deviceandbrowserinfo.com /are_you_a_bot reports HUMAN"
-            echo "for every linux-* profile running the CloakBrowser stealth engine."
+            echo "**CI pass definition:** DAB /are_you_a_bot reports HUMAN and"
+            echo "sannysoft shows 0 failed cells, for every linux-* profile."
             echo ""
             if [ -f /tmp/matrix-report.md ]; then cat /tmp/matrix-report.md; else echo "(no report produced)"; fi
           } >> "$GITHUB_STEP_SUMMARY"

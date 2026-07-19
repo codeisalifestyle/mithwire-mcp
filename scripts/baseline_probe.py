@@ -60,20 +60,20 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 #
 # Requires mithwire >= 0.50.6 (the release that introduced stealth_diagnostic).
 # ---------------------------------------------------------------------------
+from browserleaks_probes import BROWSERLEAKS_SITES  # noqa: E402
+from captcha_probes import CAPTCHA_SITES  # noqa: E402
+from detection_probes import DETECTION_SITES, IP_QUALITY_SITES  # noqa: E402
 from mithwire.stealth_diagnostic.probes import (  # noqa: E402
     NAV_PROBE,
-    DEVICEANDBROWSER_PROBE as DAB_PROBE,
-    SANNYSOFT_PROBE as SANNY_PROBE,
-    CREEPJS_PROBE as CREEP_PROBE,
-    IPAPI_PROBE,
-    WEBRTC_PROBE,
     SITES,
-    wrap as _wrap,
+    WEBRTC_PROBE,
+)
+from mithwire.stealth_diagnostic.probes import (  # noqa: E402
     parse as _parse,
 )
-from browserleaks_probes import BROWSERLEAKS_SITES  # noqa: E402
-from detection_probes import DETECTION_SITES, IP_QUALITY_SITES  # noqa: E402
-from captcha_probes import CAPTCHA_SITES  # noqa: E402
+from mithwire.stealth_diagnostic.probes import (  # noqa: E402
+    wrap as _wrap,
+)
 
 # fingerprint.com (Fingerprint Pro) computes its verdict server-side and POSTs it
 # to /api/event/v4/<id>. Originally we captured that response PASSIVELY via CDP
@@ -398,8 +398,8 @@ class BridgeDriver:
 
             ensure_virtual_display()
         from mithwire_mcp.browser import BridgeBrowser
-        from mithwire_mcp.proxy import parse_proxy
         from mithwire_mcp.fingerprint import FingerprintConfig
+        from mithwire_mcp.proxy import parse_proxy
 
         fp = FingerprintConfig.from_dict(self.fingerprint) if self.fingerprint else FingerprintConfig()
         kwargs: dict[str, Any] = {"headless": self.headless, "proxy": parse_proxy(self.proxy)}
@@ -1041,7 +1041,7 @@ def _doppler_secrets(project: str, config: str, keys: list[str]) -> dict[str, st
              "--project", project, "--config", config, "--plain"],
             text=True, timeout=10,
         ).strip().split("\n")
-        return dict(zip(keys, out)) if len(out) == len(keys) else {}
+        return dict(zip(keys, out, strict=False)) if len(out) == len(keys) else {}
     except Exception:  # noqa: BLE001
         return {}
 
