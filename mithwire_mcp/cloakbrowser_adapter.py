@@ -123,8 +123,14 @@ def fingerprint_to_flags(
     screen) cannot be overridden separately -- they are all derived from the
     seed for internal consistency. Only platform, timezone, and locale can be
     set independently.
+
+    ``--no-sandbox`` is intentionally NOT added here. The engine's ``Config``
+    auto-disables the sandbox when running as root on POSIX (the Docker / CI
+    case), and the caller can set ``sandbox=False`` explicitly. Unconditionally
+    disabling the sandbox is a detectable signal on macOS/desktop where it is
+    not needed.
     """
-    flags: list[str] = ["--no-sandbox"]
+    flags: list[str] = []
 
     if profile_name:
         seed = _profile_seed(profile_name)
