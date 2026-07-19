@@ -43,8 +43,8 @@ class CloakBrowserUnavailable(RuntimeError):
 
 
 def is_platform_supported() -> bool:
-    """Return True if the current OS supports the CloakBrowser free binary."""
-    return sys.platform.startswith("linux")
+    """Return True if the current OS supports the CloakBrowser binary."""
+    return sys.platform.startswith("linux") or sys.platform == "darwin"
 
 
 def require_platform() -> None:
@@ -52,7 +52,7 @@ def require_platform() -> None:
     if not is_platform_supported():
         os_name = platform.system()
         raise ValueError(
-            f"engine='stealth' is only supported on Linux (current: {os_name}). "
+            f"engine='stealth' requires Linux or macOS (current: {os_name}). "
             "Use engine='stock' (default) on this platform, which applies "
             "Mithwire's CDP/JS stealth patches."
         )
@@ -151,10 +151,13 @@ def fingerprint_to_flags(
     if fp.timezone_id:
         flags.append(f"--fingerprint-timezone={fp.timezone_id}")
 
-    lang = fp.primary_language
-    if lang:
-        flags.append(f"--lang={lang}")
-        flags.append(f"--fingerprint-locale={lang}")
+    if fp.languages:
+        lang_csv = ",".join(fp.languages)
+        flags.append(f"--lang={lang_csv}")
+        flags.append(f"--fingerprint-locale={fp.primary_language}")
+    elif fp.primary_language:
+        flags.append(f"--lang={fp.primary_language}")
+        flags.append(f"--fingerprint-locale={fp.primary_language}")
 
     if not headless:
         flags.append("--ignore-gpu-blocklist")
