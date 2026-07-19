@@ -124,13 +124,16 @@ def fingerprint_to_flags(
     seed for internal consistency. Only platform, timezone, and locale can be
     set independently.
 
-    ``--no-sandbox`` is intentionally NOT added here. The engine's ``Config``
-    auto-disables the sandbox when running as root on POSIX (the Docker / CI
-    case), and the caller can set ``sandbox=False`` explicitly. Unconditionally
-    disabling the sandbox is a detectable signal on macOS/desktop where it is
-    not needed.
+    ``--no-sandbox`` is added only on Linux: CloakBrowser's custom Chromium
+    build does not ship the SUID sandbox helper (``chrome-sandbox``) that
+    stock Chromium packages install, so namespace sandboxing always fails on
+    Linux regardless of user.  On macOS the App Sandbox mechanism works
+    without a helper binary, so the flag is omitted to avoid the detectable
+    "unsupported command-line flag" infobar.
     """
     flags: list[str] = []
+    if sys.platform.startswith("linux"):
+        flags.append("--no-sandbox")
 
     if profile_name:
         seed = _profile_seed(profile_name)
