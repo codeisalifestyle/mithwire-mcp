@@ -1186,7 +1186,7 @@ class BrowserSessionManager:
 
             if not is_platform_supported():
                 logger.warning(
-                    "engine='stealth' requested but platform is not Linux. "
+                    "engine='stealth' requested but platform is not supported. "
                     "Falling back to engine='stock'."
                 )
                 resolved_engine = "stock"
