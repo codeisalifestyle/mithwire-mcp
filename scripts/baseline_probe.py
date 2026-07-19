@@ -1143,7 +1143,7 @@ def main() -> None:
         "--engine",
         choices=["stock", "stealth"],
         default="stock",
-        help="BridgeBrowser engine (stealth uses CloakBrowser on Linux with Xvfb when headful). Bridge-only.",
+        help="BridgeBrowser engine (stealth uses CloakBrowser on Linux/macOS; Xvfb for headful on Linux). Bridge-only.",
     )
     ap.add_argument(
         "--package-dir",
