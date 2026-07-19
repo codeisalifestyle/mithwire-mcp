@@ -61,7 +61,7 @@ class LocalProxyRelay:
 
     @staticmethod
     def _build_auth_header(upstream: ProxyConfig) -> bytes:
-        raw = f"{upstream.username or ''}:{upstream.password or ''}".encode("utf-8")
+        raw = f"{upstream.username or ''}:{upstream.password or ''}".encode()
         token = base64.b64encode(raw).decode("ascii")
         return f"Proxy-Authorization: Basic {token}\r\n".encode("ascii")
 

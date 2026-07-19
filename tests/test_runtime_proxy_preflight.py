@@ -22,7 +22,6 @@ from mithwire_mcp.fingerprint import FingerprintConfig
 from mithwire_mcp.proxy_health import ProxyHealthError
 from mithwire_mcp.runtime import BrowserSessionManager
 
-
 _EGRESS_DE = {
     "ip": "203.0.113.42",
     "location": {
@@ -39,7 +38,7 @@ _EGRESS_DE = {
 class _StubBrowser:
     """Drop-in for ``BridgeBrowser`` that captures what runtime asked for."""
 
-    instances: list["_StubBrowser"] = []
+    instances: list[_StubBrowser] = []
 
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
@@ -68,7 +67,7 @@ class _StubBrowser:
         self.align_called = True
         return {"exit_ip": "fallback", "timezone": "UTC"}
 
-    async def apply_fingerprint(self, fp: "FingerprintConfig") -> dict[str, Any]:
+    async def apply_fingerprint(self, fp: FingerprintConfig) -> dict[str, Any]:
         """Mirror the real browser's contract: merge the incoming fp into our
         ``fingerprint`` and return a flat ``applied`` dict of every field that
         was actually set on the incoming layer.

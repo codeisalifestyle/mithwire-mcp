@@ -23,7 +23,6 @@ from .fingerprint import FingerprintConfig
 from .proxy import _redact_rotation_url, parse_proxy
 from .proxy_health import (
     ProxyHealthError,
-    ProxyRotationError,
     egress_summary,
     probe_proxy,
     trigger_rotation,

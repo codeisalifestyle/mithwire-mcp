@@ -19,7 +19,6 @@ from mithwire_mcp.actions import save_cookies
 from mithwire_mcp.cookies import resolve_cookie_path
 from mithwire_mcp.state_store import BrowserStateStore
 
-
 # ----------------------------------------------------------------------
 # Pure resolver
 # ----------------------------------------------------------------------

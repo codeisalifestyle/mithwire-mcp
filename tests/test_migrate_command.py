@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import io
 import json
-import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from mithwire_mcp.migrate import _run_migration, main as migrate_main
+from mithwire_mcp.migrate import _run_migration
+from mithwire_mcp.migrate import main as migrate_main
 from mithwire_mcp.state_store import BrowserStateStore
 
 
