@@ -380,6 +380,9 @@ class BrowserSessionManager:
         account_aliases: list[str] | None = None,
         preset: str | None = None,
         launch_options: dict[str, Any] | None = None,
+        fingerprint: dict[str, Any] | None = None,
+        proxy_ref: str | None = None,
+        warming_status: str | None = None,
     ) -> dict[str, Any]:
         return self._state_store.set_profile(
             profile_name=profile,
@@ -387,7 +390,44 @@ class BrowserSessionManager:
             account_aliases=account_aliases,
             preset=preset,
             launch_options=launch_options,
+            fingerprint=fingerprint,
+            proxy_ref=proxy_ref,
+            warming_status=warming_status,
         )
+
+    async def regenerate_profile_fingerprint(
+        self,
+        *,
+        profile: str,
+        os: str | None = None,
+        browser: str | None = None,
+    ) -> dict[str, Any]:
+        """Regenerate and persist a new fingerprint for a profile."""
+        profile_payload = self._state_store.resolve_profile_reference(profile)
+        profile_name = str(profile_payload["name"])
+
+        from . import fingerprint_gen
+
+        if not fingerprint_gen.is_available():
+            raise ValueError(
+                "BrowserForge is not installed. "
+                "Install with: pip install mithwire-mcp[fingerprints]"
+            )
+
+        fp = fingerprint_gen.generate(
+            os=os,
+            browser=browser or "chrome",
+        )
+        fp_dict = fp.to_metadata()
+        if not fp_dict:
+            raise ValueError("BrowserForge generated an empty fingerprint.")
+
+        self._state_store.set_profile_fingerprint(profile_name, fp_dict)
+        return {
+            "profile": profile_name,
+            "fingerprint": fp_dict,
+            "regenerated": True,
+        }
 
     async def delete_profile(
         self,
@@ -1061,9 +1101,24 @@ class BrowserSessionManager:
             preset_payload = self._state_store.get_preset(effective_preset_name)
             preset_values = preset_payload.get("values", {})
 
+        # Profile identity layer: the profile's persisted fingerprint and
+        # bound proxy_ref.  These sit between launch_options and explicit
+        # args in the merge chain so they override preset/launch_options
+        # (they ARE the profile's stable identity) but yield to explicit
+        # session_start overrides.
+        profile_identity: dict[str, Any] = {}
+        if profile_payload:
+            persisted_fp = profile_payload.get("fingerprint")
+            if isinstance(persisted_fp, dict) and persisted_fp:
+                profile_identity["fingerprint"] = persisted_fp
+            profile_top_proxy_ref = profile_payload.get("proxy_ref")
+            if isinstance(profile_top_proxy_ref, str) and profile_top_proxy_ref.strip():
+                profile_identity["proxy_ref"] = profile_top_proxy_ref
+
         resolved_values = effective_launch_options(
             preset_values,
             profile_launch_options,
+            profile_identity,
             explicit,
         )
 
@@ -1124,6 +1179,7 @@ class BrowserSessionManager:
             "profile": profile_payload,
             "profile_name": resolved_profile_name,
             "proxy_ref": proxy_ref_name if isinstance(proxy_ref_name, str) and proxy_ref_name.strip() else None,
+            "has_persisted_fingerprint": bool(profile_identity.get("fingerprint")),
         }
 
     async def start_session(
@@ -1327,6 +1383,43 @@ class BrowserSessionManager:
 
             await ensure_observers(browser)
             page = await get_url_and_title(browser)
+
+            # FINGERPRINT PERSISTENCE
+            # On a profile's first launch (no persisted fingerprint), save the
+            # computed identity so subsequent launches replay it instead of
+            # regenerating — the profile's "face" is now stable.
+            launched_profile_name = launch_context.get("profile_name")
+            if launched_profile_name and not launch_context.get("has_persisted_fingerprint"):
+                fp_to_persist = fingerprint_config.to_metadata()
+                if fp_to_persist:
+                    try:
+                        self._state_store.set_profile_fingerprint(
+                            launched_profile_name, fp_to_persist
+                        )
+                        logger.info(
+                            "Persisted fingerprint for profile %s",
+                            launched_profile_name,
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to persist fingerprint for profile %s",
+                            launched_profile_name,
+                            exc_info=True,
+                        )
+
+            # LIFECYCLE METADATA
+            if launched_profile_name:
+                try:
+                    self._state_store.update_profile_launch_metadata(
+                        launched_profile_name
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to update launch metadata for profile %s",
+                        launched_profile_name,
+                        exc_info=True,
+                    )
+
             session = BrowserSession(
                 session_id=resolved_session_id,
                 browser=browser,
