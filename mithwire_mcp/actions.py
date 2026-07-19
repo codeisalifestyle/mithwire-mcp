@@ -1374,6 +1374,29 @@ async def solve_cloudflare(
     return result
 
 
+async def warmup_session(
+    browser: BridgeBrowser,
+    *,
+    sites: list[str] | None = None,
+    visits: int = 5,
+    min_dwell: float = 15.0,
+    max_dwell: float = 60.0,
+    geo_region: str | None = None,
+) -> dict[str, Any]:
+    from .warmup import warm_session
+
+    result = await warm_session(
+        browser,
+        sites=sites,
+        visits_per_session=max(1, visits),
+        dwell_range=(max(1.0, min_dwell), max(max(1.0, min_dwell), max_dwell)),
+        scroll=True,
+        accept_cookies=True,
+        geo_region=geo_region,
+    )
+    return result.to_dict()
+
+
 async def take_screenshot(
     browser: BridgeBrowser,
     *,
