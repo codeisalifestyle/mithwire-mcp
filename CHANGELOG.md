@@ -5,6 +5,14 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.3.2](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.3.1...v0.3.2) (2026-07-19)
+
+
+### Bug Fixes
+
+* **ci:** refine CI/CD pipeline and remove leaked test credential ([503d098](https://github.com/codeisalifestyle/mithwire-mcp/commit/503d0984a052bab277f0a7e7ae83f2ac6e125661))
+* **ci:** refine CI/CD pipeline and security hardening ([d0939e3](https://github.com/codeisalifestyle/mithwire-mcp/commit/d0939e3632e9e61fc716ed33fecfd65c728790da))
+
 ## [0.3.1](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.3.0...v0.3.1) (2026-07-19)
 
 
