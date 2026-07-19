@@ -63,6 +63,11 @@ Example:
     # Headful, direct (no proxy) -- exercises the spoof layer in isolation
     .venv/bin/python scripts/profile_matrix.py --driver bridge --headful
 
+    # Stealth mode, linux profiles only, headless (CI configuration)
+    .venv/bin/python scripts/profile_matrix.py --driver bridge --headless \
+        --engine stealth --profiles-filter 'linux-*' --skip-fpcom \
+        --skip-browserleaks --skip-captcha --skip-detection --skip-ipquality
+
     # Headful via mobile proxy with proxy timezone alignment (the realistic
     # production configuration the MCP runtime uses).
     .venv/bin/python scripts/profile_matrix.py --driver bridge --headful \
@@ -222,6 +227,11 @@ def _run_baseline(
     proxy: str | None,
     align: bool,
     skip_fpcom: bool,
+    engine: str,
+    skip_browserleaks: bool,
+    skip_captcha: bool,
+    skip_detection: bool,
+    skip_ipquality: bool,
     out_path: Path,
     timeout_s: float,
 ) -> tuple[bool, str]:
@@ -234,6 +244,7 @@ def _run_baseline(
         "--label", profile.stem,
         "--fingerprint", str(profile),
         "--out", str(out_path),
+        "--engine", engine,
     ]
     if proxy:
         cmd += ["--proxy", proxy]
@@ -241,6 +252,14 @@ def _run_baseline(
         cmd += ["--align-to-proxy"]
     if skip_fpcom:
         cmd += ["--skip-fpcom"]
+    if skip_browserleaks:
+        cmd += ["--skip-browserleaks"]
+    if skip_captcha:
+        cmd += ["--skip-captcha"]
+    if skip_detection:
+        cmd += ["--skip-detection"]
+    if skip_ipquality:
+        cmd += ["--skip-ipquality"]
     try:
         subprocess.run(cmd, check=True, capture_output=True, timeout=timeout_s)
     except subprocess.TimeoutExpired:
@@ -330,8 +349,20 @@ def main() -> int:
                         help="Proxy spec passed to baseline_probe.py (colon or URL form).")
     parser.add_argument("--align-to-proxy", action="store_true",
                         help="Pin browser timezone to the proxy egress IP (requires --proxy).")
+    parser.add_argument("--engine", choices=["stock", "stealth"], default="stock",
+                        help="Engine mode passed to baseline_probe.py (stealth uses CloakBrowser).")
     parser.add_argument("--skip-fpcom", action="store_true",
                         help="Skip the demo.fingerprint.com capture (rate-limited; speeds runs).")
+    parser.add_argument("--skip-browserleaks", action="store_true",
+                        help="Skip BrowserLeaks probes (flaky third-party site).")
+    parser.add_argument("--skip-captcha", action="store_true",
+                        help="Skip captcha probes (reCAPTCHA, Turnstile).")
+    parser.add_argument("--skip-detection", action="store_true",
+                        help="Skip third-party detection sites (BrowserScan, incolumitas, pixelscan).")
+    parser.add_argument("--skip-ipquality", action="store_true",
+                        help="Skip IP-quality sites (OVP.js). Auto-skipped without a proxy.")
+    parser.add_argument("--profiles-filter", default=None,
+                        help="Glob pattern to filter profile filenames (e.g. 'linux-*'). Default: all profiles.")
     parser.add_argument("--out-dir", type=Path, default=Path("/tmp/profile-matrix"),
                         help="Per-profile JSON outputs go here.")
     parser.add_argument("--per-profile-timeout", type=float, default=240.0,
@@ -344,9 +375,12 @@ def main() -> int:
         print(f"profiles directory not found: {args.profiles_dir}", file=sys.stderr)
         return 2
 
-    profiles = sorted(args.profiles_dir.glob("*.json"))
+    glob_pattern = args.profiles_filter if args.profiles_filter else "*.json"
+    if not glob_pattern.endswith(".json"):
+        glob_pattern += ".json"
+    profiles = sorted(args.profiles_dir.glob(glob_pattern))
     if not profiles:
-        print(f"no .json profiles in {args.profiles_dir}", file=sys.stderr)
+        print(f"no profiles matching '{glob_pattern}' in {args.profiles_dir}", file=sys.stderr)
         return 2
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -372,6 +406,11 @@ def main() -> int:
             proxy=args.proxy,
             align=args.align_to_proxy,
             skip_fpcom=args.skip_fpcom,
+            engine=args.engine,
+            skip_browserleaks=args.skip_browserleaks,
+            skip_captcha=args.skip_captcha,
+            skip_detection=args.skip_detection,
+            skip_ipquality=args.skip_ipquality,
             out_path=out_path,
             timeout_s=args.per_profile_timeout,
         )

@@ -110,17 +110,22 @@ jobs:
         run: uv run pytest tests/test_fingerprint_application.py -v
 
   # -----------------------------------------------------------------------
-  # 3. Anti-detect matrix -- the product-level gate. The CI pass definition
-  #    is: deviceandbrowserinfo.com /are_you_a_bot says HUMAN for every
-  #    preset profile. Sannysoft, CreepJS, and Fingerprint Pro are still
-  #    measured (see the matrix's info columns) but DO NOT gate CI -- they
-  #    are developer observability.
+  # 3. Anti-detect matrix -- the product-level gate. Uses the stealth
+  #    engine (CloakBrowser) on Linux, which is the production deployment
+  #    path for VPS workloads. Only linux-* profiles are tested (the host
+  #    OS matches the profile OS, yielding the cleanest signal).
   #
-  #    --skip-fpcom drops the rate-limited commercial API. Profile presets
-  #    live under ``tests/profiles/*.json`` and ride along with the repo.
+  #    CI pass definition: deviceandbrowserinfo.com /are_you_a_bot reports
+  #    HUMAN for every profile AND sannysoft shows 0 failed cells. CreepJS
+  #    and fingerprint.com are informational only.
+  #
+  #    Third-party detection sites (BrowserScan, incolumitas, pixelscan),
+  #    BrowserLeaks, captcha probes, and IP-quality sites are skipped to
+  #    keep CI fast and deterministic (no flaky external dependencies
+  #    beyond the two gate sites).
   # -----------------------------------------------------------------------
   detection-matrix:
-    name: Anti-detect matrix (DAB gate)
+    name: Anti-detect matrix (stealth engine)
     runs-on: ubuntu-latest
     needs: unit-fast
     timeout-minutes: 15
@@ -139,41 +144,56 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: mithwire-mcp/uv.lock
-      - name: Allow unprivileged user namespaces (Ubuntu 24.04 AppArmor)
-        # See e2e-application job for context: the runner's default AppArmor
-        # profile blocks Chrome's user-namespace sandbox; we relax it instead
-        # of falling back to --no-sandbox (which would itself be a detection
-        # signal, defeating the point of the matrix gate).
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: Install Chrome
-        id: setup-chrome
-        uses: browser-actions/setup-chrome@v1
-        with:
-          chrome-version: stable
-      - name: Install Python + dependencies
+      - name: Install system dependencies
+        # CloakBrowser needs the same shared libs as Chromium. Fonts keep
+        # the fingerprint realistic. No setup-chrome step — stealth mode
+        # uses the CloakBrowser binary, not system Chrome.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fonts-liberation \
+            fonts-noto-color-emoji \
+            libgbm1 \
+            libnss3 \
+            libatk-bridge2.0-0 \
+            libgtk-3-0 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxrandr2 \
+            libasound2t64 \
+            xvfb
+      - name: Install Python + dependencies (with stealth extra)
         working-directory: mithwire-mcp
-        run: uv sync --group dev
-      - name: Run anti-detect matrix
+        run: uv sync --group dev --extra stealth
+      - name: Cache CloakBrowser binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cloakbrowser
+          key: cloakbrowser-${{ runner.os }}-${{ hashFiles('mithwire-mcp/pyproject.toml') }}
+          restore-keys: cloakbrowser-${{ runner.os }}-
+      - name: Run anti-detect matrix (stealth engine, linux profiles)
         id: matrix
         working-directory: mithwire-mcp
-        env:
-          CHROME: ${{ steps.setup-chrome.outputs.chrome-path }}
-        # Headless + no proxy keeps the matrix self-contained for CI.
-        # ``--report`` writes the Markdown table for the job summary so
-        # reviewers see per-profile DAB verdicts at a glance.
         run: |
           uv run python scripts/profile_matrix.py \
             --driver bridge \
             --headless \
+            --engine stealth \
+            --profiles-filter 'linux-*' \
             --skip-fpcom \
+            --skip-browserleaks \
+            --skip-captcha \
+            --skip-detection \
+            --skip-ipquality \
             --report /tmp/matrix-report.md
       - name: Publish matrix report to job summary
         if: always()
         run: |
           {
-            echo "## Anti-detect matrix"
+            echo "## Anti-detect matrix (stealth engine)"
             echo ""
-            echo "**CI pass definition:** deviceandbrowserinfo.com /are_you_a_bot reports HUMAN for every profile."
+            echo "**CI pass definition:** deviceandbrowserinfo.com /are_you_a_bot reports HUMAN"
+            echo "for every linux-* profile running the CloakBrowser stealth engine."
             echo ""
             if [ -f /tmp/matrix-report.md ]; then cat /tmp/matrix-report.md; else echo "(no report produced)"; fi
           } >> "$GITHUB_STEP_SUMMARY"
