@@ -5,6 +5,13 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.3.1](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.3.0...v0.3.1) (2026-07-19)
+
+
+### Features
+
+* **ci:** run detection matrix with stealth engine on Linux ([d7ba86b](https://github.com/codeisalifestyle/mithwire-mcp/commit/d7ba86bd0ff371b0228355284c41c05ef9e1f3f2))
+
 ## [0.3.0](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.2.2...v0.3.0) (2026-07-19)
 
 
