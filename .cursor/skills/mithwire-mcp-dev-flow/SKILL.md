@@ -19,13 +19,31 @@ The project is **two repos** at the top of `~/Projects/`:
 | `mithwire-mcp` | `~/Projects/mithwire-mcp/` | This repo. The MCP server. Imports the engine. Distributed on PyPI as `mithwire-mcp`. |
 
 The MCP's `pyproject.toml` declares a real PyPI dependency on
-`mithwire>=0.50,<0.60`, so a fresh `uv sync` in this repo pulls
+`mithwire>=0.51.2,<0.60`, so a fresh `uv sync` in this repo pulls
 the engine from the index — you don't need a local engine checkout to
 hack on the MCP. When you DO need to iterate on the engine and the MCP
 together, uncomment the `[tool.uv.sources]` block in `pyproject.toml`
 (it points at `../mithwire`) or pass `--engine-source` when
 registering a dev MCP entry. Build wheels strip `[tool.uv.sources]`, so
 the override never reaches the published artifact.
+
+### Module delegation
+
+Infrastructure modules live in the **engine** and are thin-re-exported
+by the MCP for import-path stability:
+
+| MCP module | Engine source | What it provides |
+| --- | --- | --- |
+| `mithwire_mcp.proxy` | `mithwire.proxy.config` | `ProxyConfig`, `parse_proxy()` |
+| `mithwire_mcp.local_proxy` | `mithwire.proxy.relay` | `LocalProxyRelay` |
+| `mithwire_mcp.proxy_health` | `mithwire.proxy.health` | `probe_proxy()`, `trigger_rotation()`, `egress_summary()` |
+| `mithwire_mcp.fingerprint_gen` | `mithwire.fingerprint_gen` | `generate()`, `generate_for_proxy()` |
+| `mithwire_mcp.cloakbrowser_adapter` | `mithwire.stealth.cloakbrowser` | `resolve_binary()`, `build_launch_config()` |
+| `mithwire_mcp.virtual_display` | `mithwire.core.virtual_display` | `ensure_virtual_display()` |
+| `mithwire_mcp.fingerprint` | `mithwire.stealth` | `FingerprintConfig` |
+
+If a capability belongs in the engine (i.e. it's useful to direct
+`pip install mithwire` users), add it there and re-export from the MCP.
 
 ## No build step
 
