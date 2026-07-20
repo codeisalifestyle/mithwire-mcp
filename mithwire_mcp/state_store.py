@@ -632,6 +632,30 @@ class BrowserStateStore:
         created_at = raw_metadata.get("created_at")
         updated_at = raw_metadata.get("updated_at")
 
+        fingerprint_raw = raw_metadata.get("fingerprint")
+        fingerprint = (
+            fingerprint_raw
+            if isinstance(fingerprint_raw, dict) and fingerprint_raw
+            else None
+        )
+
+        proxy_ref_raw = raw_metadata.get("proxy_ref")
+        proxy_ref = (
+            str(proxy_ref_raw).strip()
+            if isinstance(proxy_ref_raw, str) and str(proxy_ref_raw).strip()
+            else None
+        )
+
+        last_launched_at = raw_metadata.get("last_launched_at")
+        launch_count = int(raw_metadata.get("launch_count") or 0)
+
+        warming_status_raw = raw_metadata.get("warming_status", "none")
+        warming_status = (
+            warming_status_raw
+            if warming_status_raw in ("none", "partial", "warm")
+            else "none"
+        )
+
         payload: dict[str, Any] = {
             "name": validate_name(profile_name, label="profile name"),
             "profile_dir": str(directory),
@@ -641,6 +665,11 @@ class BrowserStateStore:
             "account_aliases": aliases,
             "preset": preset,
             "launch_options": launch_options,
+            "fingerprint": fingerprint,
+            "proxy_ref": proxy_ref,
+            "last_launched_at": last_launched_at,
+            "launch_count": launch_count,
+            "warming_status": warming_status,
             "created_at": created_at,
             "updated_at": updated_at,
         }
@@ -685,6 +714,9 @@ class BrowserStateStore:
         account_aliases: list[str] | None = None,
         preset: str | None = None,
         launch_options: dict[str, Any] | None = None,
+        fingerprint: dict[str, Any] | None = None,
+        proxy_ref: str | None = None,
+        warming_status: str | None = None,
     ) -> dict[str, Any]:
         normalized_name = validate_name(profile_name, label="profile name")
         directory = self.profile_dir(normalized_name, create=True)
@@ -712,9 +744,62 @@ class BrowserStateStore:
         if launch_options is not None:
             metadata["launch_options"] = normalize_launch_options(launch_options)
 
+        if fingerprint is not None:
+            if isinstance(fingerprint, dict) and fingerprint:
+                cleaned = {str(k): v for k, v in fingerprint.items() if v is not None}
+                metadata["fingerprint"] = cleaned or None
+            else:
+                metadata["fingerprint"] = None
+
+        if proxy_ref is not None:
+            cleaned_ref = str(proxy_ref).strip()
+            if cleaned_ref:
+                metadata["proxy_ref"] = validate_name(cleaned_ref, label="proxy name")
+            else:
+                metadata["proxy_ref"] = None
+
+        if warming_status is not None:
+            if warming_status in ("none", "partial", "warm"):
+                metadata["warming_status"] = warming_status
+            else:
+                raise ValueError(
+                    f"Invalid warming_status: {warming_status!r}. "
+                    "Must be 'none', 'partial', or 'warm'."
+                )
+
         metadata["updated_at"] = utc_now_iso()
         self._write_json(metadata_path, metadata)
         return self._profile_payload(normalized_name)
+
+    def set_profile_fingerprint(
+        self,
+        profile_name: str,
+        fingerprint: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Persist or clear the fingerprint on an existing profile."""
+        normalized_name = validate_name(profile_name, label="profile name")
+        metadata_path = self.profile_metadata_path(normalized_name)
+        if not metadata_path.exists():
+            raise ValueError(f"Profile '{normalized_name}' does not exist.")
+        metadata = self._read_json(metadata_path)
+        if isinstance(fingerprint, dict) and fingerprint:
+            metadata["fingerprint"] = fingerprint
+        else:
+            metadata.pop("fingerprint", None)
+        metadata["updated_at"] = utc_now_iso()
+        self._write_json(metadata_path, metadata)
+        return self._profile_payload(normalized_name)
+
+    def update_profile_launch_metadata(self, profile_name: str) -> None:
+        """Increment ``launch_count`` and set ``last_launched_at``."""
+        normalized_name = validate_name(profile_name, label="profile name")
+        metadata_path = self.profile_metadata_path(normalized_name)
+        if not metadata_path.exists():
+            return
+        metadata = self._read_json(metadata_path)
+        metadata["launch_count"] = int(metadata.get("launch_count") or 0) + 1
+        metadata["last_launched_at"] = utc_now_iso()
+        self._write_json(metadata_path, metadata)
 
     def delete_profile(self, profile: str, *, delete_user_data_dir: bool = False) -> dict[str, Any]:
         resolved = self.resolve_profile_reference(profile)

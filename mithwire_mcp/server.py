@@ -57,6 +57,7 @@ from .actions import (
     wait_for_selector,
     wait_for_text,
     wait_for_url,
+    warmup_session,
 )
 from .actions import (
     wait_seconds as wait_for_seconds,
@@ -316,7 +317,14 @@ def create_server(
             "of the preset, keyed by the same fields session_start accepts (headless, "
             "start_url, browser_args, sandbox, fingerprint, proxy, proxy_ref, "
             "cookie_file, cookie_fallback_domain, webrtc_leak_protection, "
-            "browser_executable_path, user_data_dir, engine)."
+            "browser_executable_path, user_data_dir, engine). "
+            "``fingerprint`` (optional dict) is the profile's persisted browser "
+            "identity — generated automatically on first launch if not set, but "
+            "can be set/overridden here. It takes precedence over preset/launch_options "
+            "fingerprint fields in the merge chain. "
+            "``proxy_ref`` (optional string) binds a proxy registry entry to the "
+            "profile as its default proxy. Overrides any proxy_ref in launch_options. "
+            "``warming_status`` (optional) is 'none', 'partial', or 'warm'."
         ),
     )
     async def session_profile_set(
@@ -325,6 +333,9 @@ def create_server(
         account_aliases: list[str] | None = None,
         preset: str | None = None,
         launch_options: dict[str, Any] | None = None,
+        fingerprint: dict[str, Any] | None = None,
+        proxy_ref: str | None = None,
+        warming_status: str | None = None,
     ) -> dict[str, Any]:
         return await manager.set_profile(
             profile=profile,
@@ -332,6 +343,31 @@ def create_server(
             account_aliases=account_aliases,
             preset=preset,
             launch_options=launch_options,
+            fingerprint=fingerprint,
+            proxy_ref=proxy_ref,
+            warming_status=warming_status,
+        )
+
+    @mcp.tool(
+        name="session_profile_regenerate_fingerprint",
+        description=(
+            "Regenerate and persist a new fingerprint for a profile using "
+            "BrowserForge's Bayesian network. The new fingerprint replaces "
+            "the profile's stored identity; subsequent launches will use it. "
+            "Requires browserforge (pip install mithwire-mcp[fingerprints]). "
+            "Optional os ('windows', 'macos', 'linux') and browser (default "
+            "'chrome') control the generated identity's platform family."
+        ),
+    )
+    async def session_profile_regenerate_fingerprint(
+        profile: str,
+        os: str | None = None,
+        browser: str | None = None,
+    ) -> dict[str, Any]:
+        return await manager.regenerate_profile_fingerprint(
+            profile=profile,
+            os=os,
+            browser=browser,
         )
 
     @mcp.tool(name="session_profile_delete", description="Delete profile metadata or entire profile directory.")
@@ -1415,6 +1451,45 @@ def create_server(
             },
         )
 
+    @mcp.tool(
+        name="session_warmup",
+        description=(
+            "Warm a browser session by visiting sites to accumulate realistic "
+            "browsing state (cookies, localStorage, history). A fresh profile "
+            "with no history is a strong bot signal; this tool builds a natural "
+            "footprint. Uses a curated site list by default; pass sites= to "
+            "override. geo_region filters the built-in list to a country code "
+            '(e.g. "US", "GB", "DE") plus global sites.'
+        ),
+    )
+    async def session_warmup(
+        session_id: str,
+        sites: list[str] | None = None,
+        visits: int = 5,
+        min_dwell: float = 15.0,
+        max_dwell: float = 60.0,
+        geo_region: str | None = None,
+    ) -> dict[str, Any]:
+        return await manager.run_action(
+            session_id=session_id,
+            action_name="session_warmup",
+            operation=lambda browser: warmup_session(
+                browser,
+                sites=sites,
+                visits=visits,
+                min_dwell=min_dwell,
+                max_dwell=max_dwell,
+                geo_region=geo_region,
+            ),
+            action_args={
+                "sites": sites,
+                "visits": visits,
+                "min_dwell": min_dwell,
+                "max_dwell": max_dwell,
+                "geo_region": geo_region,
+            },
+        )
+
     @mcp.tool(name="browser_evaluate", description="Evaluate JavaScript in current page.")
     async def browser_evaluate(
         session_id: str,
@@ -1573,6 +1648,90 @@ async def _run_with_dashboard(
             holder["server"] = None
 
 
+def _warmup_cli(argv: list[str]) -> int:
+    """CLI entry point: warm a profile without an active MCP session."""
+    import anyio
+
+    warmup_parser = argparse.ArgumentParser(
+        prog="mithwire-mcp warmup",
+        description="Warm a browser profile by simulating natural browsing.",
+    )
+    warmup_parser.add_argument(
+        "--profile", required=True, help="Name of the managed profile to warm."
+    )
+    warmup_parser.add_argument(
+        "--visits", type=int, default=5, help="Number of sites to visit (default: 5)."
+    )
+    warmup_parser.add_argument(
+        "--geo", default=None, help='Filter sites by region code (e.g. "US", "GB", "DE").'
+    )
+    warmup_parser.add_argument(
+        "--min-dwell", type=float, default=15.0, help="Min dwell seconds per site (default: 15)."
+    )
+    warmup_parser.add_argument(
+        "--max-dwell", type=float, default=60.0, help="Max dwell seconds per site (default: 60)."
+    )
+    warmup_parser.add_argument(
+        "--headless", action="store_true", help="Run in headless mode."
+    )
+    warmup_parser.add_argument(
+        "--state-root", default=None, help="State root directory for profiles."
+    )
+    warmup_parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+    )
+    args = warmup_parser.parse_args(argv)
+    logging.basicConfig(level=getattr(logging, args.log_level, logging.INFO))
+
+    async def _run() -> int:
+        manager = BrowserSessionManager(state_root=args.state_root)
+        session_info = await manager.start_session(
+            session_id=f"warmup_{args.profile}",
+            headless=args.headless,
+            start_url=None,
+            browser_args=None,
+            browser_executable_path=None,
+            sandbox=None,
+            cookie_file=None,
+            cookie_fallback_domain=None,
+            profile=args.profile,
+            preset=None,
+        )
+        session_id = session_info["session_id"]
+        try:
+            result = await manager.run_action(
+                session_id=session_id,
+                action_name="session_warmup",
+                operation=lambda browser: warmup_session(
+                    browser,
+                    visits=args.visits,
+                    min_dwell=args.min_dwell,
+                    max_dwell=args.max_dwell,
+                    geo_region=args.geo,
+                ),
+                action_args={
+                    "visits": args.visits,
+                    "min_dwell": args.min_dwell,
+                    "max_dwell": args.max_dwell,
+                    "geo_region": args.geo,
+                },
+            )
+            import json as _json
+
+            print(_json.dumps(result, indent=2))  # noqa: T201
+        finally:
+            await manager.stop_session(session_id=session_id)
+        return 0
+
+    try:
+        return anyio.run(_run)
+    except Exception as exc:
+        logger.error("Warmup failed: %s", exc)
+        return 1
+
+
 def main() -> None:
     # Dispatch subcommands before building the server parser so subcommand
     # flags can't accidentally clash with server flags (e.g. --state-root is
@@ -1585,6 +1744,9 @@ def main() -> None:
         from .migrate import main as migrate_main
 
         raise SystemExit(migrate_main(argv[1:]))
+
+    if argv and argv[0] == "warmup":
+        raise SystemExit(_warmup_cli(argv[1:]))
 
     parser = build_parser()
     args = parser.parse_args()
