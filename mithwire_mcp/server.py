@@ -316,7 +316,14 @@ def create_server(
             "of the preset, keyed by the same fields session_start accepts (headless, "
             "start_url, browser_args, sandbox, fingerprint, proxy, proxy_ref, "
             "cookie_file, cookie_fallback_domain, webrtc_leak_protection, "
-            "browser_executable_path, user_data_dir, engine)."
+            "browser_executable_path, user_data_dir, engine). "
+            "``fingerprint`` (optional dict) is the profile's persisted browser "
+            "identity — generated automatically on first launch if not set, but "
+            "can be set/overridden here. It takes precedence over preset/launch_options "
+            "fingerprint fields in the merge chain. "
+            "``proxy_ref`` (optional string) binds a proxy registry entry to the "
+            "profile as its default proxy. Overrides any proxy_ref in launch_options. "
+            "``warming_status`` (optional) is 'none', 'partial', or 'warm'."
         ),
     )
     async def session_profile_set(
@@ -325,6 +332,9 @@ def create_server(
         account_aliases: list[str] | None = None,
         preset: str | None = None,
         launch_options: dict[str, Any] | None = None,
+        fingerprint: dict[str, Any] | None = None,
+        proxy_ref: str | None = None,
+        warming_status: str | None = None,
     ) -> dict[str, Any]:
         return await manager.set_profile(
             profile=profile,
@@ -332,6 +342,31 @@ def create_server(
             account_aliases=account_aliases,
             preset=preset,
             launch_options=launch_options,
+            fingerprint=fingerprint,
+            proxy_ref=proxy_ref,
+            warming_status=warming_status,
+        )
+
+    @mcp.tool(
+        name="session_profile_regenerate_fingerprint",
+        description=(
+            "Regenerate and persist a new fingerprint for a profile using "
+            "BrowserForge's Bayesian network. The new fingerprint replaces "
+            "the profile's stored identity; subsequent launches will use it. "
+            "Requires browserforge (pip install mithwire-mcp[fingerprints]). "
+            "Optional os ('windows', 'macos', 'linux') and browser (default "
+            "'chrome') control the generated identity's platform family."
+        ),
+    )
+    async def session_profile_regenerate_fingerprint(
+        profile: str,
+        os: str | None = None,
+        browser: str | None = None,
+    ) -> dict[str, Any]:
+        return await manager.regenerate_profile_fingerprint(
+            profile=profile,
+            os=os,
+            browser=browser,
         )
 
     @mcp.tool(name="session_profile_delete", description="Delete profile metadata or entire profile directory.")
