@@ -17,7 +17,6 @@
   "webgl_vendor": "Google Inc. (Intel)",
   "webgl_renderer": "ANGLE (Intel, Mesa Intel(R) UHD Graphics 630 (CFL GT2), OpenGL ES 3.2)",
   "source": {
-    "preset": "linux-uk-residential",
     "notes": "same-OS-family Linux/London identity; Intel integrated GPU; pairs with UK residential exit"
   }
 }

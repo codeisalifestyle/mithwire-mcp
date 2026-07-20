@@ -1,26 +1,19 @@
-"""Centralized profile, preset, proxy, and cookie storage.
+"""Centralized profile, proxy, and cookie storage.
 
 Layout under ``state_root`` (default ``~/.mithwire-mcp``):
 
-* ``profiles/<name>/`` — Chromium user-data directory + a small ``profile.json``
-  capturing description, account aliases, an optional ``preset`` to inherit
-  shared launch fields from, and any per-profile ``launch_options`` overrides.
-* ``presets/<name>.json`` — opt-in shared launch recipes (e.g. ``mac-us``)
-  pulled in when a profile or session names them.
-* ``proxies/<name>.json`` — first-class proxy registry. Profiles or presets
-  reference an entry by name via the ``proxy_ref`` launch option; the runtime
-  expands the reference at session start.
-* ``cookies/`` — recommended inbox for one-shot cookie injection / export
-  files referenced by the ``cookie_file`` launch option.
+* ``profiles/<name>/`` — Chromium user-data directory + ``profile.json`` with
+  the browser identity (fingerprint, proxy_ref, launch_options, lifecycle).
+* ``proxies/<name>.json`` — proxy registry. Profiles reference an entry by
+  name via ``proxy_ref``; the runtime expands the reference at session start.
+* ``cookies/`` — cookie inbox for one-shot cookie injection / export files
+  referenced by the ``cookie_file`` launch option.
 
-The launch resolution chain that consumes this layout is intentionally short
-(see ``BrowserSessionManager._resolve_launch_context``):
+The launch resolution chain (see ``BrowserSessionManager._resolve_launch_context``):
 
 1. Built-in defaults (``BUILTIN_LAUNCH_DEFAULTS``).
-2. Effective preset values (session-supplied ``preset`` arg if any, else the
-   profile's ``preset``; never both — one or the other).
-3. Profile ``launch_options`` (top-level overrides on the profile).
-4. Explicit ``session_start`` arguments.
+2. Profile (``launch_options`` + identity: fingerprint, proxy_ref).
+3. Explicit ``session_start`` arguments.
 """
 
 from __future__ import annotations
@@ -80,7 +73,7 @@ DEFAULT_STATE_ROOT_DIRNAME = ".mithwire-mcp"
 
 VALID_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
-# Fields that may appear in a preset's ``values``, a profile's ``launch_options``,
+# Fields that may appear in a profile's ``launch_options``,
 # or as explicit ``session_start`` kwargs. ``proxy_ref`` is new: it points at an
 # entry in ``proxies/`` and is expanded by the runtime before ``parse_proxy``.
 LAUNCH_OPTION_KEYS = (
@@ -306,10 +299,6 @@ class BrowserStateStore:
         return self.state_root / "cookies"
 
     @property
-    def presets_dir(self) -> Path:
-        return self.state_root / "presets"
-
-    @property
     def proxies_dir(self) -> Path:
         return self.state_root / "proxies"
 
@@ -319,47 +308,45 @@ class BrowserStateStore:
         for directory in (
             self.profiles_dir,
             self.cookies_dir,
-            self.presets_dir,
             self.proxies_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
             _chmod_quiet(directory, SECRET_DIR_MODE)
 
+    def _merge_preset_file_into_launch_options(
+        self,
+        preset_name: str,
+        existing_launch_options: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Merge a legacy preset/config file into launch_options.
+
+        Preset values have lower precedence — only keys not already set in
+        ``launch_options`` are added.
+        """
+        preset_values: dict[str, Any] = {}
+        for directory in (self.state_root / "presets", self.state_root / "configs"):
+            path = directory / f"{preset_name}.json"
+            if not path.exists():
+                continue
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(raw, dict):
+                preset_values = normalize_launch_options(raw)
+            break
+        return merge_launch_options(preset_values, existing_launch_options)
+
     def _migrate_legacy_layout(self) -> None:
         """One-shot, idempotent fix-up for state roots written by older versions.
 
-        * ``configs/`` -> ``presets/``: the launch-config concept was renamed
-          to make its opt-in/template nature obvious. If both directories
-          exist, files in the legacy ``configs/`` are copied over only when
-          a same-named preset is missing, then the legacy directory is
-          removed once empty so the upgrade never silently merges contents.
-        * ``profile.json`` shape: the old schema nested per-profile launch
-          fields under ``launch_overrides`` and named the inherited template
-          ``launch_config``. The new schema puts launch fields under
-          ``launch_options`` and names the template ``preset``. We rewrite
-          in place, preserving timestamps, on the next read/write cycle.
+        * ``profile.json`` shape: ``launch_overrides`` -> ``launch_options``;
+          ``launch_config`` and ``preset`` references are absorbed into
+          ``launch_options`` from legacy ``configs/`` or ``presets/`` files,
+          then removed.
+        * After all profiles are migrated, ``presets/`` is removed once its
+          contents have been absorbed.
         """
-        legacy_configs = self.state_root / "configs"
-        if legacy_configs.is_dir():
-            try:
-                for path in legacy_configs.glob("*.json"):
-                    target = self.presets_dir / path.name
-                    if target.exists():
-                        continue
-                    shutil.move(str(path), str(target))
-                # Remove the directory only if it ended up empty (i.e. nothing
-                # was preserved by a prior run we couldn't move).
-                if not any(legacy_configs.iterdir()):
-                    legacy_configs.rmdir()
-            except OSError as exc:
-                logger.warning(
-                    "Could not migrate legacy configs/ -> presets/: %s",
-                    exc,
-                )
-
-        # Rewrite profile.json files that still use the old ``launch_config`` /
-        # ``launch_overrides`` keys. We touch the file only when something is
-        # actually outdated, and we drop the legacy keys after merging.
         if self.profiles_dir.is_dir():
             for profile_path in self.profiles_dir.iterdir():
                 if not profile_path.is_dir():
@@ -374,12 +361,7 @@ class BrowserStateStore:
                 if not isinstance(raw, dict):
                     continue
                 changed = False
-                if "launch_config" in raw and "preset" not in raw:
-                    raw["preset"] = raw.pop("launch_config")
-                    changed = True
-                elif "launch_config" in raw:
-                    raw.pop("launch_config")
-                    changed = True
+
                 if "launch_overrides" in raw:
                     overrides = raw.pop("launch_overrides")
                     if isinstance(overrides, dict) and overrides:
@@ -389,6 +371,30 @@ class BrowserStateStore:
                             merged.update(existing)
                         raw["launch_options"] = merged
                     changed = True
+
+                if "launch_config" in raw:
+                    config_name = raw.pop("launch_config")
+                    if isinstance(config_name, str) and config_name.strip():
+                        raw["launch_options"] = self._merge_preset_file_into_launch_options(
+                            config_name.strip(),
+                            raw.get("launch_options")
+                            if isinstance(raw.get("launch_options"), dict)
+                            else None,
+                        )
+                    changed = True
+
+                preset_name_raw = raw.get("preset")
+                if "preset" in raw:
+                    raw.pop("preset")
+                    if isinstance(preset_name_raw, str) and preset_name_raw.strip():
+                        raw["launch_options"] = self._merge_preset_file_into_launch_options(
+                            preset_name_raw.strip(),
+                            raw.get("launch_options")
+                            if isinstance(raw.get("launch_options"), dict)
+                            else None,
+                        )
+                    changed = True
+
                 if changed:
                     try:
                         secure_write_text(meta, json.dumps(raw, ensure_ascii=True, indent=2))
@@ -399,12 +405,21 @@ class BrowserStateStore:
                             exc,
                         )
 
+        presets_dir = self.state_root / "presets"
+        if presets_dir.is_dir():
+            try:
+                if any(presets_dir.iterdir()):
+                    shutil.rmtree(presets_dir)
+                else:
+                    presets_dir.rmdir()
+            except OSError as exc:
+                logger.warning("Could not remove legacy presets/ directory: %s", exc)
+
     def paths_summary(self) -> dict[str, str]:
         return {
             "state_root": str(self.state_root),
             "profiles_dir": str(self.profiles_dir),
             "cookies_dir": str(self.cookies_dir),
-            "presets_dir": str(self.presets_dir),
             "proxies_dir": str(self.proxies_dir),
         }
 
@@ -420,74 +435,6 @@ class BrowserStateStore:
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:
         secure_write_text(path, json.dumps(payload, ensure_ascii=True, indent=2))
-
-    # ------------------------------------------------------------------
-    # Presets (shared launch recipes)
-    # ------------------------------------------------------------------
-
-    def preset_path(self, preset_name: str) -> Path:
-        normalized = validate_name(preset_name, label="preset name")
-        return self.presets_dir / f"{normalized}.json"
-
-    def list_presets(self) -> list[dict[str, Any]]:
-        presets: list[dict[str, Any]] = []
-        for path in sorted(self.presets_dir.glob("*.json")):
-            name = path.stem
-            values = normalize_launch_options(self._read_json(path))
-            presets.append(
-                {
-                    "name": name,
-                    "path": str(path),
-                    "values": values,
-                    "effective_values": effective_launch_options(values),
-                }
-            )
-        return presets
-
-    def get_preset(self, preset_name: str) -> dict[str, Any]:
-        path = self.preset_path(preset_name)
-        exists = path.exists()
-        values = normalize_launch_options(self._read_json(path) if exists else {})
-        return {
-            "name": validate_name(preset_name, label="preset name"),
-            "path": str(path),
-            "exists": exists,
-            "values": values,
-            "effective_values": effective_launch_options(values),
-        }
-
-    def set_preset(
-        self,
-        *,
-        preset_name: str,
-        values: dict[str, Any] | None,
-        merge: bool = True,
-    ) -> dict[str, Any]:
-        path = self.preset_path(preset_name)
-        current_values = (
-            normalize_launch_options(self._read_json(path))
-            if (merge and path.exists())
-            else {}
-        )
-        incoming = normalize_launch_options(values)
-        for key, value in incoming.items():
-            if value is None:
-                current_values.pop(key, None)
-            else:
-                current_values[key] = value
-        self._write_json(path, current_values)
-        return self.get_preset(preset_name)
-
-    def delete_preset(self, preset_name: str) -> dict[str, Any]:
-        path = self.preset_path(preset_name)
-        existed = path.exists()
-        if existed:
-            path.unlink()
-        return {
-            "name": validate_name(preset_name, label="preset name"),
-            "path": str(path),
-            "deleted": existed,
-        }
 
     # ------------------------------------------------------------------
     # Proxies (first-class registry of upstream proxy credentials)
@@ -622,12 +569,6 @@ class BrowserStateStore:
         description = str(description_raw).strip() if description_raw is not None else None
         aliases = self._normalize_aliases(raw_metadata.get("account_aliases"))
 
-        preset_raw = raw_metadata.get("preset")
-        preset = (
-            validate_name(str(preset_raw).strip(), label="preset name")
-            if isinstance(preset_raw, str) and preset_raw.strip()
-            else None
-        )
         launch_options = normalize_launch_options(raw_metadata.get("launch_options"))
         created_at = raw_metadata.get("created_at")
         updated_at = raw_metadata.get("updated_at")
@@ -663,7 +604,6 @@ class BrowserStateStore:
             "exists": directory.exists(),
             "description": description,
             "account_aliases": aliases,
-            "preset": preset,
             "launch_options": launch_options,
             "fingerprint": fingerprint,
             "proxy_ref": proxy_ref,
@@ -712,7 +652,6 @@ class BrowserStateStore:
         profile_name: str,
         description: str | None = None,
         account_aliases: list[str] | None = None,
-        preset: str | None = None,
         launch_options: dict[str, Any] | None = None,
         fingerprint: dict[str, Any] | None = None,
         proxy_ref: str | None = None,
@@ -732,14 +671,6 @@ class BrowserStateStore:
 
         if account_aliases is not None:
             metadata["account_aliases"] = self._normalize_aliases(account_aliases)
-
-        if preset is not None:
-            cleaned_preset = str(preset).strip()
-            metadata["preset"] = (
-                validate_name(cleaned_preset, label="preset name")
-                if cleaned_preset
-                else None
-            )
 
         if launch_options is not None:
             metadata["launch_options"] = normalize_launch_options(launch_options)

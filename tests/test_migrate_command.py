@@ -17,15 +17,31 @@ from mithwire_mcp.state_store import BrowserStateStore
 def _write_legacy_with_inlined_proxies(root: Path) -> None:
     """Lay out a state root using the old configs/ + launch_overrides shape
     *and* inline the same proxy credentials in two places, so we can verify
-    both the rename/rewrite path and the proxy-extraction grouping path."""
+    both the absorption path and the proxy-extraction grouping path."""
     configs = root / "configs"
     configs.mkdir(parents=True, exist_ok=True)
     (configs / "default.json").write_text(
         json.dumps(
             {
                 "headless": True,
-                # Same proxy as below — extraction should collapse into one
-                # registry entry referenced from both sites.
+                "proxy": {
+                    "scheme": "http",
+                    "host": "Gw.Proxy.Test",
+                    "port": 8080,
+                    "username": "alice",
+                    "password": "secret",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    presets = root / "presets"
+    presets.mkdir(parents=True, exist_ok=True)
+    (presets / "default.json").write_text(
+        json.dumps(
+            {
+                "headless": True,
                 "proxy": {
                     "scheme": "http",
                     "host": "Gw.Proxy.Test",
@@ -45,12 +61,12 @@ def _write_legacy_with_inlined_proxies(root: Path) -> None:
         json.dumps(
             {
                 "description": "Alice",
-                "launch_config": "default",
+                "preset": "default",
                 "launch_overrides": {
                     "headless": False,
                     "proxy": {
                         "scheme": "http",
-                        "host": "gw.proxy.test",  # casefold-equal to above
+                        "host": "gw.proxy.test",
                         "port": 8080,
                         "username": "alice",
                         "password": "secret",
@@ -63,8 +79,6 @@ def _write_legacy_with_inlined_proxies(root: Path) -> None:
 
 
 class MigrateCommandTest(unittest.TestCase):
-    # ---- core report ----------------------------------------------------
-
     def test_reports_layout_changes_and_advisory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -78,16 +92,12 @@ class MigrateCommandTest(unittest.TestCase):
                 dry_run=False,
             )
 
-            self.assertEqual(report.legacy_configs_renamed, ["default"])
             self.assertIn("alice", report.profiles_rewritten)
+            self.assertEqual(report.presets_absorbed, ["default"])
             self.assertTrue(report.default_advisory)
-            # Two inlined call-sites (preset + profile launch_options), even
-            # though they share credentials.
             self.assertEqual(report.inlined_proxies_seen, 2)
             self.assertEqual(report.extracted_proxies, [])
             self.assertFalse(report.dry_run)
-
-    # ---- dry run ---------------------------------------------------------
 
     def test_dry_run_leaves_state_untouched(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -107,10 +117,8 @@ class MigrateCommandTest(unittest.TestCase):
             )
 
             self.assertTrue(report.dry_run)
-            # The report still describes the work, including extraction.
-            self.assertEqual(report.legacy_configs_renamed, ["default"])
+            self.assertIn("alice", report.profiles_rewritten)
             self.assertEqual(len(report.extracted_proxies), 1)
-            # ...but nothing changed on disk in the real state root.
             self.assertEqual(
                 sorted(p.name for p in (root / "configs").iterdir()),
                 configs_before,
@@ -120,8 +128,6 @@ class MigrateCommandTest(unittest.TestCase):
                 profile_before,
             )
             self.assertFalse((root / "proxies").exists())
-
-    # ---- proxy extraction -----------------------------------------------
 
     def test_extract_proxies_dedups_and_rewrites(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -136,31 +142,23 @@ class MigrateCommandTest(unittest.TestCase):
                 dry_run=False,
             )
 
-            # Both call-sites share one credential signature -> one entry.
             self.assertEqual(len(report.extracted_proxies), 1)
             extracted = report.extracted_proxies[0]
             self.assertIn("preset:default", extracted["locations"])
             self.assertIn("profile:alice", extracted["locations"])
 
-            # The registry entry exists and reads back the right host/port.
             store = BrowserStateStore(state_root=str(root))
             entry = store.get_proxy(extracted["name"])
             self.assertTrue(entry["exists"])
             self.assertEqual(entry["values"]["host"], "gw.proxy.test")
             self.assertEqual(entry["values"]["port"], 8080)
 
-            # The call-sites now reference the registry instead of inlining.
-            preset_disk = json.loads(
-                (root / "presets" / "default.json").read_text(encoding="utf-8")
-            )
-            self.assertNotIn("proxy", preset_disk)
-            self.assertEqual(preset_disk["proxy_ref"], extracted["name"])
-
             profile_disk = json.loads(
                 (root / "profiles" / "alice" / "profile.json").read_text(encoding="utf-8")
             )
             self.assertNotIn("proxy", profile_disk["launch_options"])
             self.assertEqual(profile_disk["launch_options"]["proxy_ref"], extracted["name"])
+            self.assertFalse((root / "presets").exists())
 
     def test_extract_proxies_non_interactive_without_auto_name_skips(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -171,17 +169,13 @@ class MigrateCommandTest(unittest.TestCase):
                 state_root=str(root),
                 extract_proxies=True,
                 auto_name=False,
-                interactive=True,  # asked, but stdin isn't a TTY under unittest
+                interactive=True,
                 dry_run=False,
             )
 
             self.assertEqual(report.extracted_proxies, [])
             self.assertIsNotNone(report.extraction_skipped_reason)
-            # ensure_layout always creates proxies/, so check it stays empty
-            # rather than absent.
             self.assertEqual(list((root / "proxies").glob("*.json")), [])
-
-    # ---- idempotence ----------------------------------------------------
 
     def test_second_run_is_a_no_op(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -203,12 +197,10 @@ class MigrateCommandTest(unittest.TestCase):
                 dry_run=False,
             )
 
-            self.assertEqual(second.legacy_configs_renamed, [])
             self.assertEqual(second.profiles_rewritten, [])
+            self.assertEqual(second.presets_absorbed, [])
             self.assertEqual(second.inlined_proxies_seen, 0)
             self.assertEqual(second.extracted_proxies, [])
-
-    # ---- CLI surface ----------------------------------------------------
 
     def test_cli_json_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -229,7 +221,7 @@ class MigrateCommandTest(unittest.TestCase):
             self.assertEqual(rc, 0)
             payload = json.loads(buf.getvalue())
             self.assertFalse(payload["dry_run"])
-            self.assertEqual(payload["legacy_configs_renamed"], ["default"])
+            self.assertEqual(payload["presets_absorbed"], ["default"])
             self.assertEqual(len(payload["extracted_proxies"]), 1)
             self.assertTrue(payload["default_advisory"])
 

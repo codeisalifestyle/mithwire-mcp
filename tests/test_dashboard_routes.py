@@ -18,7 +18,7 @@ from mithwire_mcp.runtime import BrowserSessionManager
 
 
 class DashboardRouteTest(unittest.TestCase):
-    """In-process tests for /api/health, /api/system, /api/profiles, /api/presets, /api/proxies."""
+    """In-process tests for /api/health, /api/system, /api/profiles, /api/proxies."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -183,33 +183,6 @@ class DashboardRouteTest(unittest.TestCase):
             client.get("/api/profiles/test-profile-hard", headers=headers).status_code,
             404,
         )
-
-    # -- presets CRUD ------------------------------------------------------
-
-    def test_presets_crud_roundtrip(self) -> None:
-        client = self._client()
-        headers = {"X-Dashboard-Token": self.token}
-
-        # Empty list on a fresh state root.
-        listed = client.get("/api/presets", headers=headers).json()
-        self.assertEqual(listed["count"], 0)
-
-        # Set values (merge mode).
-        up = client.post(
-            "/api/presets/stealth",
-            json={"values": {"headless": True}, "merge": True},
-            headers=headers,
-        )
-        self.assertEqual(up.status_code, 200)
-        self.assertTrue(up.json()["values"].get("headless"))
-
-        # Get back.
-        got = client.get("/api/presets/stealth", headers=headers).json()
-        self.assertTrue(got["values"].get("headless"))
-
-        # Delete.
-        deleted = client.delete("/api/presets/stealth", headers=headers)
-        self.assertEqual(deleted.status_code, 200)
 
     # -- proxies CRUD ------------------------------------------------------
 

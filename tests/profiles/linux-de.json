@@ -17,7 +17,6 @@
   "webgl_vendor": "Google Inc. (AMD)",
   "webgl_renderer": "ANGLE (AMD, AMD Radeon RX 6700 XT (navi22, LLVM 17.0.6, DRM 3.54, 6.5.0-44-generic), OpenGL ES 3.2)",
   "source": {
-    "preset": "linux-de-berlin",
     "notes": "same-OS-family Linux/Berlin identity; AMD discrete GPU; high-spec workstation"
   }
 }

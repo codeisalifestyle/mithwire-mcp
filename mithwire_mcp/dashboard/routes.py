@@ -121,7 +121,6 @@ async def profiles_create_or_update(request: Request) -> Response:
             profile=name.strip(),
             description=body.get("description"),
             account_aliases=body.get("account_aliases"),
-            preset=body.get("preset"),
             launch_options=body.get("launch_options"),
         )
     except (ValueError, TypeError) as exc:
@@ -152,59 +151,6 @@ async def profiles_delete(request: Request) -> Response:
     except ValueError as exc:
         return _err(str(exc), status=404)
     await bus.publish("profile.changed", {"profile": result.get("profile"), "op": "delete"})
-    return _ok(result)
-
-
-# ---------------------------------------------------------------------------
-# Presets (shared launch recipes)
-# ---------------------------------------------------------------------------
-
-
-async def presets_list(request: Request) -> Response:
-    manager: BrowserSessionManager = _state(request)["manager"]
-    return _ok(await manager.list_presets())
-
-
-async def presets_get(request: Request) -> Response:
-    manager: BrowserSessionManager = _state(request)["manager"]
-    name = request.path_params["name"]
-    try:
-        return _ok(await manager.get_preset(preset_name=name))
-    except ValueError as exc:
-        return _err(str(exc), status=400)
-
-
-async def presets_set(request: Request) -> Response:
-    manager: BrowserSessionManager = _state(request)["manager"]
-    bus: DashboardEventBus = _state(request)["events"]
-    name = request.path_params["name"]
-    try:
-        body = await _read_json(request)
-    except ValueError as exc:
-        return _err(str(exc))
-    values = body.get("values") if isinstance(body.get("values"), dict) else body
-    merge = bool(body.get("merge", True))
-    try:
-        result = await manager.set_preset(
-            preset_name=name,
-            values=values,
-            merge=merge,
-        )
-    except (ValueError, TypeError) as exc:
-        return _err(str(exc), status=400)
-    await bus.publish("preset.changed", {"preset": name, "op": "upsert"})
-    return _ok(result)
-
-
-async def presets_delete(request: Request) -> Response:
-    manager: BrowserSessionManager = _state(request)["manager"]
-    bus: DashboardEventBus = _state(request)["events"]
-    name = request.path_params["name"]
-    try:
-        result = await manager.delete_preset(preset_name=name)
-    except (ValueError, TypeError) as exc:
-        return _err(str(exc), status=400)
-    await bus.publish("preset.changed", {"preset": name, "op": "delete"})
     return _ok(result)
 
 
@@ -310,7 +256,6 @@ async def sessions_create(request: Request) -> Response:
             cookie_file=body.get("cookie_file"),
             cookie_fallback_domain=body.get("cookie_fallback_domain"),
             profile=body.get("profile"),
-            preset=body.get("preset"),
             proxy=body.get("proxy"),
             proxy_ref=body.get("proxy_ref"),
             fingerprint=body.get("fingerprint"),
@@ -587,7 +532,6 @@ async def events_ws(websocket: WebSocket) -> None:
                         "session.navigated",
                         "session.error",
                         "profile.changed",
-                        "preset.changed",
                         "proxy.changed",
                     ]
                 },
@@ -649,11 +593,6 @@ def build_routes() -> list[Any]:
         Route("/api/profiles", profiles_create_or_update, methods=["POST"]),
         Route("/api/profiles/{name}", profiles_get, methods=["GET"]),
         Route("/api/profiles/{name}", profiles_delete, methods=["DELETE"]),
-        # Presets (shared launch recipes)
-        Route("/api/presets", presets_list, methods=["GET"]),
-        Route("/api/presets/{name}", presets_get, methods=["GET"]),
-        Route("/api/presets/{name}", presets_set, methods=["POST", "PUT"]),
-        Route("/api/presets/{name}", presets_delete, methods=["DELETE"]),
         # Proxies (registry)
         Route("/api/proxies", proxies_list, methods=["GET"]),
         Route("/api/proxies/{name}", proxies_get, methods=["GET"]),

@@ -33,6 +33,12 @@ The MCP package is a **PEP 660 editable install** in `.venv`
 (`__editable__.mithwire_mcp-*.pth`). Saving a `.py` file *is* the
 rebuild — the source is imported directly. There is nothing to compile or reinstall.
 
+## Branching strategy (trunk-based)
+
+Both repos use **trunk-based development**: `main` is the only long-lived
+branch. All work happens on short-lived feature branches that PR directly
+into `main`. There is no `develop` branch.
+
 ## Stable / dev architecture (release-aware development)
 
 Two release tracks, both running through Cursor at the same time:
@@ -71,10 +77,10 @@ The discipline that makes this work:
    ~/Projects/mithwire` (or any sibling engine worktree) when
    you need the dev MCP to load engine code from disk too — useful when
    a feature spans both layers.
-6. **Promotion is a normal git merge.** When `feat/x` is ready: merge
-   into `main`, `git pull` in the main checkout (stable picks up the
-   change at next reload), `git worktree remove …/feat-x`, then run
-   `prune-dev-mcps.py` to clean up the orphan dev entry.
+6. **Promotion is a normal PR merge to `main`.** When `feat/x` is ready:
+   open a PR to `main`, CI gates the merge, `git pull` in the main checkout
+   (stable picks up the change at next reload), `git worktree remove …/feat-x`,
+   then run `prune-dev-mcps.py` to clean up the orphan dev entry.
 
 ### Recipe: starting work on a new branch
 
@@ -584,8 +590,7 @@ known geo and a rotation endpoint. **Never** put live credentials in this
 file or anywhere under `.cursor/skills/` — this skill IS tracked in the
 repo. Keep proxy creds in the proxy registry (`session_proxy_set`,
 persisted to `~/.mithwire-mcp/proxies/<name>.json`, owner-only) and
-reference them by name (`proxy_ref`) in profiles, presets, or
-`session_start`.
+reference them by name (`proxy_ref`) in profiles or `session_start`.
 
 For ad-hoc shell sniffing, source creds from your shell env (e.g. a
 1Password / pass-style helper or an untracked `.env.local`) rather than

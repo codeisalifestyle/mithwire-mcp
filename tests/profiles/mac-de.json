@@ -17,7 +17,6 @@
   "webgl_vendor": "Google Inc. (Apple)",
   "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Pro, Unspecified Version)",
   "source": {
-    "preset": "mac-de-berlin",
     "notes": "same-OS-family Mac/Berlin identity"
   }
 }
