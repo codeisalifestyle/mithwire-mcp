@@ -5,6 +5,37 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.4.0](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.3.2...v0.4.0) (2026-07-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* rename BridgeBrowser → MithwireBrowser, stock → cdp, wire warmup status
+* The 4 preset MCP tools (session_preset_list/get/set/delete) and the preset parameter on session_start/session_profile_set are removed. Profiles are now the single source of identity and launch configuration.
+
+### Features
+
+* add profile warming infrastructure ([5d8a8cc](https://github.com/codeisalifestyle/mithwire-mcp/commit/5d8a8cc029e2530cfb7ba44bb8fc8f3efc2f4965))
+* enable stealth mode on macOS, fix language propagation ([e4822af](https://github.com/codeisalifestyle/mithwire-mcp/commit/e4822af858d6b97d0048a5f01b1303defa3f48d3))
+* enable stealth on macOS, fix language propagation ([7e1b5f3](https://github.com/codeisalifestyle/mithwire-mcp/commit/7e1b5f3380961826a910c204fc8cbcb857cd8a4b))
+* profile architecture — persisted fingerprint, bound proxy, lifecycle metadata ([67cc10a](https://github.com/codeisalifestyle/mithwire-mcp/commit/67cc10af20aebd44a2f9744de328a396331ff3dc))
+* remove presets, simplify to 3-layer profile model ([d63e8f3](https://github.com/codeisalifestyle/mithwire-mcp/commit/d63e8f3c12fa212f711ad0c5ad3c2916a8a0efbf))
+* rename BridgeBrowser → MithwireBrowser, stock → cdp, wire warmup status ([a0137cf](https://github.com/codeisalifestyle/mithwire-mcp/commit/a0137cf9c8058220f0b0b114e314ef066c49e020))
+* stealth on macOS + language propagation fix ([63aff70](https://github.com/codeisalifestyle/mithwire-mcp/commit/63aff70dc1e2cfd695766f24024ee9f2fe81e6c8))
+
+
+### Bug Fixes
+
+* add --no-sandbox for CloakBrowser on Linux only ([cd20dc2](https://github.com/codeisalifestyle/mithwire-mcp/commit/cd20dc2989ef86c81e136d8d9dc8fb6f2ea52b04))
+* conditional --no-sandbox for CloakBrowser (Linux only) ([c2de032](https://github.com/codeisalifestyle/mithwire-mcp/commit/c2de0323c6e08327fe55a5126a3875bf2440a133))
+* remove unconditional --no-sandbox from CloakBrowser adapter ([8525a14](https://github.com/codeisalifestyle/mithwire-mcp/commit/8525a14b6313607d1682320ba7f324f1b906d0cd))
+
+
+### Refactors
+
+* delegate infrastructure modules to engine ([deec182](https://github.com/codeisalifestyle/mithwire-mcp/commit/deec182e9c02607c9ce503067c94ec8d71bb9e4c))
+* delegate proxy, fingerprint, cloakbrowser, virtual_display to engine ([85805cd](https://github.com/codeisalifestyle/mithwire-mcp/commit/85805cd38cdcfa874678ea67b9f9df3ce65c2dcf))
+
 ## [0.3.2](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.3.1...v0.3.2) (2026-07-19)
 
 
