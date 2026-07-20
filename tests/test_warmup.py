@@ -19,7 +19,7 @@ class _FakeTab:
 
 
 class _FakeBrowser:
-    """Minimal mock matching the BridgeBrowser API used by warm_session."""
+    """Minimal mock matching the MithwireBrowser API used by warm_session."""
 
     def __init__(self) -> None:
         self.tab = _FakeTab()

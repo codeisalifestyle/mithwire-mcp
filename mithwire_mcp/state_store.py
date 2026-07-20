@@ -121,7 +121,7 @@ BUILTIN_LAUNCH_DEFAULTS: dict[str, Any] = {
     "proxy_ref": None,
     "fingerprint": None,
     "webrtc_leak_protection": "auto",
-    "engine": "stock",
+    "engine": "cdp",
 }
 
 

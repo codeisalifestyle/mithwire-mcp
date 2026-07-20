@@ -164,11 +164,11 @@ def create_server(
             "state) and headful. Pass profile=<name> to launch a persistent managed "
             "profile whose cookies/storage survive across runs. Optional: headless, "
             "proxy, proxy_ref, start_url, cookie_file (one-shot cookie injection). "
-            "engine selects the browser engine: 'stock' (default) uses the system "
+            "engine selects the browser engine: 'cdp' (default) uses the system "
             "Chrome with Mithwire CDP/JS patches; 'stealth' uses a CloakBrowser "
             "binary with C++ source-level fingerprint patches for zero-lie stealth "
-            "(Linux only; requires pip install mithwire-mcp[stealth]). On non-Linux "
-            "platforms, 'stealth' falls back to 'stock' with a warning. "
+            "(requires pip install mithwire-mcp[stealth]). On unsupported "
+            "platforms, 'stealth' falls back to 'cdp' with a warning. "
             "proxy accepts 'http://host:port', 'http://user:pass@host:port', the "
             "provider 'scheme:host:port:user:pass' form, or socks5://host:port "
             "(authenticated SOCKS not wired yet; use the HTTP endpoint). "
@@ -1418,7 +1418,7 @@ def create_server(
         max_dwell: float = 60.0,
         geo_region: str | None = None,
     ) -> dict[str, Any]:
-        return await manager.run_action(
+        result = await manager.run_action(
             session_id=session_id,
             action_name="session_warmup",
             operation=lambda browser: warmup_session(
@@ -1437,6 +1437,32 @@ def create_server(
                 "geo_region": geo_region,
             },
         )
+        # Auto-update profile warming_status based on result
+        if result.get("ok"):
+            session = await manager.get_session(session_id)
+            profile_name = session.metadata.get("profile")
+            if profile_name:
+                visited = result.get("sites_visited", 0)
+                errors = result.get("errors", [])
+                if visited > 0 and not errors:
+                    status = "warm"
+                elif visited > 0:
+                    status = "partial"
+                else:
+                    status = "none"
+                try:
+                    manager._state_store.set_profile(
+                        profile_name=profile_name,
+                        warming_status=status,
+                    )
+                    result["warming_status_updated"] = status
+                except Exception:
+                    logger.warning(
+                        "Failed to update warming_status for profile %s",
+                        profile_name,
+                        exc_info=True,
+                    )
+        return result
 
     @mcp.tool(name="browser_evaluate", description="Evaluate JavaScript in current page.")
     async def browser_evaluate(
@@ -1665,6 +1691,28 @@ def _warmup_cli(argv: list[str]) -> int:
                     "geo_region": args.geo,
                 },
             )
+            # Auto-update profile warming_status
+            if result.get("ok"):
+                visited = result.get("sites_visited", 0)
+                errors = result.get("errors", [])
+                if visited > 0 and not errors:
+                    status = "warm"
+                elif visited > 0:
+                    status = "partial"
+                else:
+                    status = "none"
+                try:
+                    manager._state_store.set_profile(
+                        profile_name=args.profile,
+                        warming_status=status,
+                    )
+                    result["warming_status_updated"] = status
+                except Exception:
+                    logger.warning(
+                        "Failed to update warming_status for profile %s",
+                        args.profile,
+                        exc_info=True,
+                    )
             import json as _json
 
             print(_json.dumps(result, indent=2))  # noqa: T201

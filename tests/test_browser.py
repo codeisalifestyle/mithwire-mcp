@@ -3,7 +3,7 @@ import signal
 import unittest
 from unittest.mock import MagicMock, patch
 
-from mithwire_mcp.browser import BridgeBrowser
+from mithwire_mcp.browser import MithwireBrowser
 from mithwire_mcp.proxy import parse_proxy
 
 
@@ -13,7 +13,7 @@ class ProxyArgTest(unittest.IsolatedAsyncioTestCase):
     async def test_unauthenticated_proxy_points_chrome_at_upstream(self) -> None:
         # No credentials -> no relay needed, Chrome talks to the upstream directly.
         proxy = parse_proxy("http://1.2.3.4:8080")
-        browser = BridgeBrowser(headless=True, proxy=proxy)
+        browser = MithwireBrowser(headless=True, proxy=proxy)
 
         # Fail the launch right after kwargs are captured; we only care about args.
         with patch("mithwire.start", side_effect=RuntimeError("stop")) as mock_start:
@@ -28,7 +28,7 @@ class ProxyArgTest(unittest.IsolatedAsyncioTestCase):
         # relay (127.0.0.1, unauthenticated) -- never the upstream directly --
         # so it never sees a 407 and we avoid per-request CDP Fetch interception.
         proxy = parse_proxy("http://user:pass@1.2.3.4:8080")
-        browser = BridgeBrowser(headless=True, proxy=proxy)
+        browser = MithwireBrowser(headless=True, proxy=proxy)
 
         try:
             with patch("mithwire.start", side_effect=RuntimeError("stop")) as mock_start:
@@ -51,7 +51,7 @@ class ProxyArgTest(unittest.IsolatedAsyncioTestCase):
                 await browser._proxy_relay.close()
 
     async def test_no_proxy_means_no_proxy_arg(self) -> None:
-        browser = BridgeBrowser(headless=True)
+        browser = MithwireBrowser(headless=True)
         with patch("mithwire.start", side_effect=RuntimeError("stop")) as mock_start:
             with self.assertRaises(RuntimeError):
                 await browser.start()
@@ -63,7 +63,7 @@ class StartNoSandboxFallbackTest(unittest.IsolatedAsyncioTestCase):
     async def test_launch_failure_does_not_retry_unsandboxed(self) -> None:
         """A failed sandboxed launch must raise, never silently retry with the
         sandbox disabled (a --no-sandbox browser is trivially bot-detectable)."""
-        browser = BridgeBrowser(headless=True, sandbox=True)
+        browser = MithwireBrowser(headless=True, sandbox=True)
 
         with patch("mithwire.start", side_effect=RuntimeError("boom")) as mock_start:
             with self.assertRaises(RuntimeError) as ctx:
@@ -106,7 +106,7 @@ class TeardownIsolationTest(unittest.IsolatedAsyncioTestCase):
     deterministically: await aclose(), SIGTERM, and SIGKILL only if wedged."""
 
     def _bridge_with(self, proc, pid: int = 4321):
-        bridge = BridgeBrowser(headless=True)
+        bridge = MithwireBrowser(headless=True)
         fake_browser = MagicMock()
         fake_browser._process = proc
         fake_browser._process_pid = pid
@@ -154,7 +154,7 @@ class KillPidFallbackTest(unittest.IsolatedAsyncioTestCase):
     must escalate SIGTERM -> SIGKILL without touching anything else."""
 
     async def test_terminate_without_proc_uses_pid(self) -> None:
-        bridge = BridgeBrowser(headless=True)
+        bridge = MithwireBrowser(headless=True)
         seen: list[int] = []
 
         async def fake_kill_pid(pid):
@@ -165,7 +165,7 @@ class KillPidFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, [7777], "no proc handle must fall back to the recorded pid")
 
     async def test_kill_pid_stops_after_sigterm_exit(self) -> None:
-        bridge = BridgeBrowser(headless=True)
+        bridge = MithwireBrowser(headless=True)
         alive = {"v": True}
         signals: list[int] = []
 
@@ -188,7 +188,7 @@ class KillPidFallbackTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_noop_without_browser(self) -> None:
-        bridge = BridgeBrowser(headless=True)
+        bridge = MithwireBrowser(headless=True)
         bridge.browser = None
         await bridge.close()  # must not raise
 

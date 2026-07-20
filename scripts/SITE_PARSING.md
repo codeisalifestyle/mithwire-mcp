@@ -146,7 +146,7 @@ result to exist and never depend on guessing how long a site takes.
   server and WAITS for `iceGatheringState === 'complete'` (9s cap) before
   reporting every candidate `addr`+`typ`. `_flatten` classifies addresses
   (mdns / private / public) and flags any public IP != egress as `REAL-IP-LEAK`.
-- **Fix — `BridgeBrowser.webrtc_leak_protection` (default `auto`):** an
+- **Fix — `MithwireBrowser.webrtc_leak_protection` (default `auto`):** an
   always-on new-document guard patches `RTCPeerConnection.prototype` members that
   are *normally own properties* (the `onicecandidate` accessor, the
   `localDescription*` accessors, `createOffer`/`createAnswer`) to drop any

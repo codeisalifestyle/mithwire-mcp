@@ -10,7 +10,7 @@ drivers and writes a normalized JSON result for apples-to-apples comparison:
                  with NO MCP layers (no fingerprint spoof, no proxy relay,
                  no timezone alignment, no WebRTC guard). Shows what the
                  engine's always-on stealth gives you on its own.
-* ``bridge``   -- the project's ``BridgeBrowser`` (engine + every MCP layer
+* ``bridge``   -- the project's ``MithwireBrowser`` (engine + every MCP layer
                  stacked on top). Run it once at HEAD and once on the
                  working tree to see whether a change is an improvement or
                  a regression.
@@ -363,7 +363,7 @@ class RawChrome:
 
 
 # ---------------------------------------------------------------------------
-# Driver: the project's BridgeBrowser (mithwire + our stealth).
+# Driver: the project's MithwireBrowser (mithwire + our stealth).
 # ---------------------------------------------------------------------------
 
 class BridgeDriver:
@@ -375,15 +375,15 @@ class BridgeDriver:
         fingerprint: dict | None = None,
         align_to_proxy: bool = False,
         webrtc: str | None = None,
-        engine: str = "stock",
+        engine: str = "cdp",
     ) -> None:
         self.headless = headless
         self.proxy = proxy
         self.engine = engine
         # WebRTC leak-protection mode override (auto/filter/disable/off); None
-        # lets BridgeBrowser use its default ("auto" -> filter when proxied).
+        # lets MithwireBrowser use its default ("auto" -> filter when proxied).
         self.webrtc = webrtc
-        # None / empty -> no-spoof (BridgeBrowser skips apply_fingerprint when the
+        # None / empty -> no-spoof (MithwireBrowser skips apply_fingerprint when the
         # config is empty). A non-empty dict turns this into the spoof case.
         self.fingerprint = fingerprint
         # When set (and a proxy is configured), exercise the REAL runtime
@@ -397,7 +397,7 @@ class BridgeDriver:
             from mithwire_mcp.virtual_display import ensure_virtual_display
 
             ensure_virtual_display()
-        from mithwire_mcp.browser import BridgeBrowser
+        from mithwire_mcp.browser import MithwireBrowser
         from mithwire_mcp.fingerprint import FingerprintConfig
         from mithwire_mcp.proxy import parse_proxy
 
@@ -418,7 +418,7 @@ class BridgeDriver:
             kwargs["browser_executable_path"] = cb_binary
             kwargs.setdefault("browser_args", []).extend(cb_flags)
 
-        self.b = BridgeBrowser(**kwargs)
+        self.b = MithwireBrowser(**kwargs)
         await self.b.start()
         # Mirror runtime.session_start: with a proxy set, align the browser
         # timezone to the egress IP before any real navigation. Calling the
@@ -705,7 +705,7 @@ async def run(
     fingerprint: dict | None = None,
     align_to_proxy: bool = False,
     webrtc: str | None = None,
-    engine: str = "stock",
+    engine: str = "cdp",
 ) -> dict:
     # Spoofing, proxy alignment, and WebRTC leak protection are MCP-layer
     # features -- only the bridge driver can exercise them. The raw and
@@ -1056,7 +1056,7 @@ def main() -> None:
             "automation' floor); "
             "mithwire = bare mithwire engine, no MCP layers (shows "
             "what the engine's always-on stealth gives you alone); "
-            "bridge   = full MCP BridgeBrowser stack (engine + fingerprint + "
+            "bridge   = full MCP MithwireBrowser stack (engine + fingerprint + "
             "proxy relay + timezone alignment + WebRTC guard)."
         ),
     )
@@ -1123,7 +1123,7 @@ def main() -> None:
         choices=["auto", "filter", "disable", "off"],
         default=None,
         help=(
-            "Override BridgeBrowser's WebRTC leak-protection mode. Default (unset) "
+            "Override MithwireBrowser's WebRTC leak-protection mode. Default (unset) "
             "uses 'auto' (filter public ICE candidates when proxied). 'filter' "
             "always filters; 'disable' removes RTCPeerConnection; 'off' disables "
             "the guard (use to reproduce the raw leak). Bridge-only."
@@ -1141,15 +1141,15 @@ def main() -> None:
     )
     ap.add_argument(
         "--engine",
-        choices=["stock", "stealth"],
-        default="stock",
-        help="BridgeBrowser engine (stealth uses CloakBrowser on Linux/macOS; Xvfb for headful on Linux). Bridge-only.",
+        choices=["cdp", "stealth"],
+        default="cdp",
+        help="MithwireBrowser engine (stealth uses CloakBrowser on Linux/macOS; Xvfb for headful on Linux). Bridge-only.",
     )
     ap.add_argument(
         "--package-dir",
         default=None,
         help=(
-            "Import the 'bridge' BridgeBrowser from this package dir instead of "
+            "Import the 'bridge' MithwireBrowser from this package dir instead of "
             "the installed/working-tree one. Point it at a git worktree's "
             "'packages/mithwire-mcp' to baseline another ref "
             "without checking it out (no stash/checkout churn)."

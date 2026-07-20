@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 from . import actions as action_ops
 from .actions import ensure_observers, get_url_and_title
-from .browser import BridgeBrowser
+from .browser import MithwireBrowser
 from .cookies import load_cookie_file, resolve_cookie_path
 from .fingerprint import FingerprintConfig
 from .proxy import _redact_rotation_url, parse_proxy
@@ -253,7 +253,7 @@ def _sanitize_trace_value(value: Any, *, key_hint: str | None = None) -> Any:
 @dataclass
 class BrowserSession:
     session_id: str
-    browser: BridgeBrowser
+    browser: MithwireBrowser
     mode: str
     created_at: str
     headless: bool
@@ -696,7 +696,7 @@ class BrowserSessionManager:
         *,
         action_name: str,
         inputs: dict[str, Any],
-    ) -> Callable[[BridgeBrowser], Awaitable[Any]] | None:
+    ) -> Callable[[MithwireBrowser], Awaitable[Any]] | None:
         if action_name == "browser_url":
             return action_ops.get_url_and_title
         if action_name == "browser_navigate":
@@ -1165,10 +1165,13 @@ class BrowserSessionManager:
         user_fingerprint = FingerprintConfig.from_dict(launch_values.get("fingerprint"))
 
         # ENGINE MODE RESOLUTION
-        resolved_engine = str(launch_values.get("engine") or "stock").strip().lower()
-        if resolved_engine not in ("stock", "stealth"):
+        resolved_engine = str(launch_values.get("engine") or "cdp").strip().lower()
+        if resolved_engine == "stock":
+            logger.info("engine='stock' is deprecated, treating as 'cdp'.")
+            resolved_engine = "cdp"
+        if resolved_engine not in ("cdp", "stealth"):
             raise ValueError(
-                f"Unknown engine '{resolved_engine}'. Use 'stock' (default) or 'stealth'."
+                f"Unknown engine '{resolved_engine}'. Use 'cdp' (default) or 'stealth'."
             )
         if resolved_engine == "stealth":
             from .cloakbrowser_adapter import is_platform_supported
@@ -1176,9 +1179,9 @@ class BrowserSessionManager:
             if not is_platform_supported():
                 logger.warning(
                     "engine='stealth' requested but platform is not supported. "
-                    "Falling back to engine='stock'."
+                    "Falling back to engine='cdp'."
                 )
-                resolved_engine = "stock"
+                resolved_engine = "cdp"
 
         # PRE-LAUNCH PROXY HEALTH CHECK
         # A session whose configured proxy is dead or has bad credentials must
@@ -1271,7 +1274,7 @@ class BrowserSessionManager:
             if vd:
                 logger.info("Virtual display available at %s", vd)
 
-        browser = BridgeBrowser(
+        browser = MithwireBrowser(
             headless=resolved_headless,
             user_data_dir=resolved_user_data_dir,
             browser_args=resolved_browser_args,
@@ -1599,7 +1602,7 @@ class BrowserSessionManager:
         *,
         session_id: str,
         action_name: str,
-        operation: Callable[[BridgeBrowser], Awaitable[Any]],
+        operation: Callable[[MithwireBrowser], Awaitable[Any]],
         action_args: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         session = await self.get_session(session_id)

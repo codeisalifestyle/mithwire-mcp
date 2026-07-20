@@ -37,7 +37,7 @@ jobs:
         run: uv run pytest -m 'not stealth_e2e' --maxfail=1
 
   # -----------------------------------------------------------------------
-  # 2. Stealth e2e -- spawn a real Chrome via BridgeBrowser and verify
+  # 2. Stealth e2e -- spawn a real Chrome via MithwireBrowser and verify
   #    that every FingerprintConfig field reaches the browser.
   # -----------------------------------------------------------------------
   e2e-application:
