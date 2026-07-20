@@ -147,7 +147,7 @@ Everything else is an optional flag on top of those two:
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `headless` | `false` (headful) | Run without a visible window (e.g. CI). |
-| `engine` | `stock` | `stock` uses system Chrome with CDP/JS patches; `stealth` uses CloakBrowser (Linux only; see below). |
+| `engine` | `cdp` | `cdp` uses system Chrome with CDP/JS patches; `stealth` uses CloakBrowser (see below). |
 | `proxy` | none | Route traffic through an upstream proxy (see below). |
 | `fingerprint` | none | Identity overrides — timezone, locale/languages, geo, user agent, platform, hardware, screen, WebGL (see below). |
 | `webrtc_leak_protection` | `auto` | Guard WebRTC against real-IP leaks: `auto` / `filter` / `disable` / `off` (see below). |
@@ -208,10 +208,10 @@ in session metadata under `proxy_exit`.
 
 | Engine | Binary | Stealth approach | Platforms |
 | --- | --- | --- | --- |
-| `stock` (default) | System Chrome/Chromium | CDP/JS overrides — timezone, UA, platform, WebGL, WebRTC, device metrics, and more applied at runtime via Chrome DevTools Protocol and injected JavaScript. | All (Linux, macOS, Windows) |
-| `stealth` | [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) | C++ source-level patches — fingerprint surfaces (canvas, WebGL, audio, fonts, GPU, screen, TLS, CDP detection) are modified directly in the Chromium source code before compilation. Zero runtime JS injection for covered surfaces. | Linux only |
+| `cdp` (default) | System Chrome/Chromium | CDP/JS overrides — timezone, UA, platform, WebGL, WebRTC, device metrics, and more applied at runtime via Chrome DevTools Protocol and injected JavaScript. | All (Linux, macOS, Windows) |
+| `stealth` | [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) | C++ source-level patches — fingerprint surfaces (canvas, WebGL, audio, fonts, GPU, screen, TLS, CDP detection) are modified directly in the Chromium source code before compilation. Zero runtime JS injection for covered surfaces. | Linux, macOS |
 
-When `engine=stealth` is requested on a non-Linux platform, it falls back to `stock` with a warning.
+When `engine=stealth` is requested on an unsupported platform, it falls back to `cdp` with a warning.
 
 **Install the stealth engine extras:**
 
@@ -279,7 +279,7 @@ biggest de-anonymization leak for a proxied browser. The
 
 ### 🔬 Verifying stealth
 
-`scripts/verify_mcp.py` launches a real session (the same `BridgeBrowser` path the
+`scripts/verify_mcp.py` launches a real session (the same `MithwireBrowser` path the
 MCP uses) against public bot-detection services and asserts the critical signals
 are clean — useful as a regression check after touching launch/stealth/proxy code:
 

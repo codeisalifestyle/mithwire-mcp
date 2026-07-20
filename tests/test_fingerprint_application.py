@@ -1,7 +1,7 @@
-"""End-to-end checks that ``BridgeBrowser.apply_fingerprint`` actually rewires
+"""End-to-end checks that ``MithwireBrowser.apply_fingerprint`` actually rewires
 the live browser surface AI clients will read.
 
-Each test starts a real headless Chrome through ``BridgeBrowser`` and navigates
+Each test starts a real headless Chrome through ``MithwireBrowser`` and navigates
 to ``https://example.com/`` (tiny, real-origin, fast). A real ``https://`` origin
 is required because ``navigator.userAgentData.brands`` has restricted semantics
 on opaque origins (``data:`` and ``about:blank``) -- empty or null there even
@@ -39,7 +39,7 @@ from typing import Any
 
 import pytest
 
-from mithwire_mcp.browser import BridgeBrowser
+from mithwire_mcp.browser import MithwireBrowser
 from mithwire_mcp.fingerprint import FingerprintConfig
 
 pytestmark = pytest.mark.stealth_e2e
@@ -143,7 +143,7 @@ def _parse(value: Any) -> Any:
 
 @unittest.skipUnless(_chrome_available(), "no Chrome/Chromium executable on PATH")
 class FingerprintApplicationTest(unittest.IsolatedAsyncioTestCase):
-    """One Chrome session per test scenario. Each test starts BridgeBrowser
+    """One Chrome session per test scenario. Each test starts MithwireBrowser
     with the relevant FingerprintConfig, navigates to a real-origin URL,
     reads back the live navigator surface, and asserts every field the
     config asked for actually applied."""
@@ -154,7 +154,7 @@ class FingerprintApplicationTest(unittest.IsolatedAsyncioTestCase):
     # sub-2 s through any mainstream connection.
     PROBE_URL = "https://example.com/"
 
-    async def _start(self, fp: FingerprintConfig | None = None) -> BridgeBrowser:
+    async def _start(self, fp: FingerprintConfig | None = None) -> MithwireBrowser:
         # Headless is the CI-friendly default; headful would also work but ties
         # the tests to a graphical session. The headless cleanup is what we want
         # to exercise anyway (it runs by default whenever headless=True).
@@ -168,7 +168,7 @@ class FingerprintApplicationTest(unittest.IsolatedAsyncioTestCase):
         chrome_path = os.environ.get("CHROME")
         if chrome_path and os.path.exists(chrome_path):
             kwargs["browser_executable_path"] = chrome_path
-        browser = BridgeBrowser(**kwargs)
+        browser = MithwireBrowser(**kwargs)
         await browser.start()
         # Two nudges before reading: (1) ``set_user_agent_override`` applies to
         # the NEXT navigation, so we must navigate at least once; (2) UA-CH
@@ -177,11 +177,11 @@ class FingerprintApplicationTest(unittest.IsolatedAsyncioTestCase):
         await browser.goto(self.PROBE_URL, wait_seconds=1.0)
         return browser
 
-    async def _navigator(self, browser: BridgeBrowser) -> dict[str, Any]:
+    async def _navigator(self, browser: MithwireBrowser) -> dict[str, Any]:
         raw = await browser.tab.evaluate(NAV_PROBE, await_promise=True, return_by_value=True)
         return _parse(raw)
 
-    async def _worker_navigator(self, browser: BridgeBrowser) -> dict[str, Any]:
+    async def _worker_navigator(self, browser: MithwireBrowser) -> dict[str, Any]:
         raw = await browser.tab.evaluate(WORKER_PROBE, await_promise=True, return_by_value=True)
         return _parse(raw)
 

@@ -227,7 +227,7 @@ pass before merging to `main`.
 | Job | Timeout | What it runs |
 | --- | --- | --- |
 | **Lint & unit tests (no Chrome)** | 5 min | `ruff check .` then `pytest -m 'not stealth_e2e' --maxfail=1` |
-| **Stealth e2e (real Chrome)** | 10 min | `pytest tests/test_fingerprint_application.py` — spawns a real Chrome via BridgeBrowser, validates FingerprintConfig fields reach the browser |
+| **Stealth e2e (real Chrome)** | 10 min | `pytest tests/test_fingerprint_application.py` — spawns a real Chrome via MithwireBrowser, validates FingerprintConfig fields reach the browser |
 | **Anti-detect matrix (stealth engine)** | 15 min | `profile_matrix.py` with CloakBrowser stealth engine, linux-* profiles only. **Pass = DAB reports HUMAN AND sannysoft shows 0 failed cells** for every profile. CreepJS / fingerprint.com are informational. Third-party sites, BrowserLeaks, captcha, and IP-quality probes are skipped (flaky external deps). |
 
 The detection-matrix installs system libs (fonts, Chromium shared libs)
@@ -439,7 +439,7 @@ apart the layers:
 | --- | --- | --- |
 | `--driver raw` | Clean Chrome over raw CDP, **no library** | The "naked automation" floor |
 | `--driver mithwire` | Bare `mithwire.start(...)`, **no MCP layers** | The engine's always-on stealth (this is `mithwire - raw`) |
-| `--driver bridge` | Full `BridgeBrowser` stack | The MCP's contribution (this is `bridge - mithwire`) |
+| `--driver bridge` | Full `MithwireBrowser` stack | The MCP's contribution (this is `bridge - mithwire`) |
 
 The natural three-way comparison is:
 
@@ -466,8 +466,8 @@ than HEAD on any signal.
 
 1. **Code version**: clean Chrome · `main` (basic mithwire: always-on
    stealth + headless-UA cleanup, **no fingerprint spoofing** — `main`'s
-   `BridgeBrowser` has no `fingerprint=` param) · feature branch.
-2. **Fingerprint mode**: **no-spoof** (`fingerprint=None`; `BridgeBrowser` skips
+   `MithwireBrowser` has no `fingerprint=` param) · feature branch.
+2. **Fingerprint mode**: **no-spoof** (`fingerprint=None`; `MithwireBrowser` skips
    `apply_fingerprint`) vs **spoof** (a `FingerprintConfig` is applied).
 
 By default every `bridge` run is **no-spoof**, so the three columns isolate the
@@ -562,7 +562,7 @@ running server. `--package-dir` selects which checkout's code the bridge imports
 (The harness lives only on the feature branch; that's fine — it always runs from
 the branch tree and only the *imported package* is swapped via `--package-dir`.)
 
-Notes / known stock-mode signals (as of the 0.50.3 merge):
+Notes / known CDP-mode signals (as of the 0.50.3 merge):
 
 - `navigator.webdriver` must read as the **boolean `false`** via the *native*
   `Navigator.prototype` getter. Do **not** `Object.defineProperty(navigator,

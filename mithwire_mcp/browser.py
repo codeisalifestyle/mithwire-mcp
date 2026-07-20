@@ -18,8 +18,8 @@ from .proxy import ProxyConfig
 logger = logging.getLogger(__name__)
 
 
-class BridgeBrowser:
-    """Thin wrapper around mithwire that always launches a fresh browser.
+class MithwireBrowser:
+    """Managed browser that launches a fresh, stealth-configured Chromium process.
 
     This wrapper never attaches to an externally-running browser: every
     instance owns the Chromium process it spawned, so teardown can safely stop
@@ -38,7 +38,7 @@ class BridgeBrowser:
         proxy: ProxyConfig | None = None,
         fingerprint: FingerprintConfig | None = None,
         webrtc_leak_protection: str = "auto",
-        engine: str = "stock",
+        engine: str = "cdp",
     ):
         self.headless = headless
         self.user_data_dir = user_data_dir
@@ -101,7 +101,7 @@ class BridgeBrowser:
         self._network_capture_failed_handler: Any = None
         self._network_capture_finished_handler: Any = None
 
-    async def __aenter__(self) -> BridgeBrowser:
+    async def __aenter__(self) -> MithwireBrowser:
         await self.start()
         return self
 
@@ -1425,3 +1425,7 @@ class BridgeBrowser:
         if raw is None:
             return None
         return str(raw)
+
+
+# Backward compat alias — will be removed in a future release.
+BridgeBrowser = MithwireBrowser

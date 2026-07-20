@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from importlib import resources
 from typing import Any
 
-from .browser import BridgeBrowser
+from .browser import MithwireBrowser
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ def filter_sites_by_region(
     ]
 
 
-async def _try_accept_cookies(browser: BridgeBrowser) -> bool:
+async def _try_accept_cookies(browser: MithwireBrowser) -> bool:
     """Look for common cookie consent banners and click accept. Fails silently."""
     try:
         elements = await browser.select_all("button, [role='button'], a")
@@ -98,7 +98,7 @@ async def _try_accept_cookies(browser: BridgeBrowser) -> bool:
     return False
 
 
-async def _random_scroll(browser: BridgeBrowser) -> None:
+async def _random_scroll(browser: MithwireBrowser) -> None:
     """Perform 2-5 scroll events with random distances and pauses."""
     num_scrolls = random.randint(2, 5)
     for _ in range(num_scrolls):
@@ -107,7 +107,7 @@ async def _random_scroll(browser: BridgeBrowser) -> None:
         await asyncio.sleep(random.uniform(1.0, 3.0))
 
 
-async def _try_click_link(browser: BridgeBrowser) -> bool:
+async def _try_click_link(browser: MithwireBrowser) -> bool:
     """With 30% probability, find a visible link and click it. Returns True if clicked."""
     if random.random() > 0.3:
         return False
@@ -124,7 +124,7 @@ async def _try_click_link(browser: BridgeBrowser) -> bool:
 
 
 async def _visit_site(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     url: str,
     *,
     dwell_range: tuple[float, float],
@@ -149,7 +149,7 @@ async def _visit_site(
 
 
 async def warm_session(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     sites: list[str] | None = None,
     visits_per_session: int = 5,
@@ -161,7 +161,7 @@ async def warm_session(
     """Warm a browser session by visiting sites to accumulate realistic state.
 
     Args:
-        browser: Active BridgeBrowser instance to warm.
+        browser: Active MithwireBrowser instance to warm.
         sites: Optional custom URL list. When None, uses the built-in curated list.
         visits_per_session: Number of sites to visit.
         dwell_range: (min, max) seconds to dwell on each page.

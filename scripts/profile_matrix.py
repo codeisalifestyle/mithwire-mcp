@@ -349,7 +349,7 @@ def main() -> int:
                         help="Proxy spec passed to baseline_probe.py (colon or URL form).")
     parser.add_argument("--align-to-proxy", action="store_true",
                         help="Pin browser timezone to the proxy egress IP (requires --proxy).")
-    parser.add_argument("--engine", choices=["stock", "stealth"], default="stock",
+    parser.add_argument("--engine", choices=["cdp", "stealth"], default="cdp",
                         help="Engine mode passed to baseline_probe.py (stealth uses CloakBrowser).")
     parser.add_argument("--skip-fpcom", action="store_true",
                         help="Skip the demo.fingerprint.com capture (rate-limited; speeds runs).")

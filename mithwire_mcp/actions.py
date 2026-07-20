@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .browser import BridgeBrowser
+from .browser import MithwireBrowser
 from .cookies import resolve_cookie_path
 from .state_store import SECRET_FILE_MODE, secure_write_text
 
@@ -455,12 +455,12 @@ def _storage_clear_script(kind: str) -> str:
     """
 
 
-async def ensure_observers(browser: BridgeBrowser) -> None:
+async def ensure_observers(browser: MithwireBrowser) -> None:
     await browser.add_script_on_new_document(_OBSERVER_SCRIPT)
     await browser.evaluate(_OBSERVER_SCRIPT)
 
 
-async def get_url_and_title(browser: BridgeBrowser) -> dict[str, Any]:
+async def get_url_and_title(browser: MithwireBrowser) -> dict[str, Any]:
     title = await browser.evaluate("document.title")
     return {
         "url": str(browser.tab.url),
@@ -469,7 +469,7 @@ async def get_url_and_title(browser: BridgeBrowser) -> dict[str, Any]:
 
 
 async def navigate_to(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     url: str,
     wait_seconds: float = DEFAULT_ACTION_WAIT_SECONDS,
@@ -479,7 +479,7 @@ async def navigate_to(
 
 
 async def navigate_back(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     wait_seconds: float = DEFAULT_ACTION_WAIT_SECONDS,
 ) -> dict[str, Any]:
@@ -493,7 +493,7 @@ async def navigate_back(
 
 
 async def navigate_forward(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     wait_seconds: float = DEFAULT_ACTION_WAIT_SECONDS,
 ) -> dict[str, Any]:
@@ -507,7 +507,7 @@ async def navigate_forward(
 
 
 async def reload_page(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     wait_seconds: float = DEFAULT_ACTION_WAIT_SECONDS,
     ignore_cache: bool = False,
@@ -521,7 +521,7 @@ async def reload_page(
     return payload
 
 
-async def list_tabs(browser: BridgeBrowser) -> dict[str, Any]:
+async def list_tabs(browser: MithwireBrowser) -> dict[str, Any]:
     tabs = await browser.list_tabs()
     return {
         "count": len(tabs),
@@ -530,7 +530,7 @@ async def list_tabs(browser: BridgeBrowser) -> dict[str, Any]:
 
 
 async def new_tab(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     url: str = "about:blank",
     switch: bool = True,
@@ -553,7 +553,7 @@ async def new_tab(
 
 
 async def switch_tab(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     tab_id: str | None = None,
     index: int | None = None,
@@ -572,7 +572,7 @@ async def switch_tab(
 
 
 async def close_tab(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     tab_id: str | None = None,
     index: int | None = None,
@@ -597,7 +597,7 @@ async def close_tab(
     return payload
 
 
-async def current_tab(browser: BridgeBrowser) -> dict[str, Any]:
+async def current_tab(browser: MithwireBrowser) -> dict[str, Any]:
     active_tab = await browser.current_tab_summary()
     payload = await get_url_and_title(browser)
     payload["tab"] = active_tab
@@ -605,7 +605,7 @@ async def current_tab(browser: BridgeBrowser) -> dict[str, Any]:
 
 
 async def handle_dialog(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     accept: bool = True,
     prompt_text: str | None = None,
@@ -627,7 +627,7 @@ async def handle_dialog(
 
 
 async def set_file_input(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     selector: str,
     file_paths: list[str],
@@ -648,7 +648,7 @@ async def set_file_input(
 
 
 async def set_download_dir(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     download_dir: str,
 ) -> dict[str, Any]:
@@ -659,7 +659,7 @@ async def set_download_dir(
 
 
 async def get_downloads(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     limit: int = DEFAULT_EVENT_LIMIT,
     clear: bool = False,
@@ -673,7 +673,7 @@ async def get_downloads(
 
 
 async def start_network_capture(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     max_entries: int = 2000,
     include_headers: bool = True,
@@ -691,7 +691,7 @@ async def start_network_capture(
 
 
 async def get_network_capture(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     limit: int = 200,
     clear: bool = False,
@@ -707,7 +707,7 @@ async def get_network_capture(
 
 
 async def stop_network_capture(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     clear: bool = False,
 ) -> dict[str, Any]:
@@ -716,7 +716,7 @@ async def stop_network_capture(
     return payload
 
 
-async def network_capture_status(browser: BridgeBrowser) -> dict[str, Any]:
+async def network_capture_status(browser: MithwireBrowser) -> dict[str, Any]:
     return await browser.network_capture_status()
 
 
@@ -752,7 +752,7 @@ def _filter_cookie_rows(
 
 
 async def get_cookies(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     domain: str | None = None,
     timeout_seconds: float = 10.0,
@@ -768,7 +768,7 @@ async def get_cookies(
 
 
 async def set_cookies(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     cookies: list[dict[str, Any]],
     fallback_domain: str | None = None,
@@ -790,7 +790,7 @@ async def set_cookies(
 
 
 async def save_cookies(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     output_path: str,
     wrap_object: bool = True,
@@ -854,7 +854,7 @@ async def save_cookies(
 
 
 async def clear_cookies(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     domain: str | None = None,
 ) -> dict[str, Any]:
@@ -870,7 +870,7 @@ async def clear_cookies(
 
 
 async def get_storage(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     kind: str = "both",
 ) -> dict[str, Any]:
@@ -892,7 +892,7 @@ async def get_storage(
 
 
 async def set_storage(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     kind: str,
     entries: dict[str, str],
@@ -917,7 +917,7 @@ async def set_storage(
 
 
 async def clear_storage(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     kind: str = "both",
 ) -> dict[str, Any]:
@@ -937,7 +937,7 @@ async def clear_storage(
     return payload
 
 
-async def snapshot_interactive(browser: BridgeBrowser, *, limit: int) -> dict[str, Any]:
+async def snapshot_interactive(browser: MithwireBrowser, *, limit: int) -> dict[str, Any]:
     payload = normalize_evaluate_payload(
         await browser.evaluate(_snapshot_script(clamp_limit(limit)))
     )
@@ -947,7 +947,7 @@ async def snapshot_interactive(browser: BridgeBrowser, *, limit: int) -> dict[st
 
 
 async def query_selector(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     selector: str,
     limit: int,
@@ -961,7 +961,7 @@ async def query_selector(
 
 
 async def click_selector(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     selector: str,
     wait_seconds: float = DEFAULT_ACTION_WAIT_SECONDS,
@@ -983,7 +983,7 @@ async def click_selector(
 
 
 async def type_into_selector(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     selector: str,
     text: str,
@@ -1020,7 +1020,7 @@ async def type_into_selector(
 
 
 async def scroll_page(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     selector: str | None = None,
     delta_y: int = 1200,
@@ -1063,7 +1063,7 @@ async def wait_seconds(seconds: float) -> dict[str, Any]:
 
 
 async def wait_for_selector(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     selector: str,
     timeout_seconds: float = 10.0,
@@ -1090,7 +1090,7 @@ async def wait_for_selector(
 
 
 async def wait_for_url(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     url_contains: str | None = None,
     url_regex: str | None = None,
@@ -1140,7 +1140,7 @@ async def wait_for_url(
 
 
 async def wait_for_text(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     text: str,
     selector: str = "body",
@@ -1193,7 +1193,7 @@ async def wait_for_text(
 
 
 async def wait_for_function(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     script: str,
     timeout_seconds: float = 10.0,
@@ -1244,7 +1244,7 @@ async def wait_for_function(
 
 
 async def wait_for_network_idle(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     idle_ms: int = 500,
     timeout_seconds: float = 10.0,
@@ -1302,7 +1302,7 @@ async def wait_for_network_idle(
 
 
 async def get_page_html(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     max_chars: int = DEFAULT_HTML_LIMIT,
 ) -> dict[str, Any]:
@@ -1318,7 +1318,7 @@ async def get_page_html(
 
 
 async def get_console_messages(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     limit: int = DEFAULT_EVENT_LIMIT,
     clear: bool = False,
@@ -1339,7 +1339,7 @@ async def get_console_messages(
 
 
 async def get_network_requests(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     limit: int = DEFAULT_EVENT_LIMIT,
     clear: bool = False,
@@ -1360,7 +1360,7 @@ async def get_network_requests(
 
 
 async def solve_cloudflare(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     timeout_seconds: float = 15.0,
     max_retries: int = 5,
@@ -1375,7 +1375,7 @@ async def solve_cloudflare(
 
 
 async def warmup_session(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     sites: list[str] | None = None,
     visits: int = 5,
@@ -1398,7 +1398,7 @@ async def warmup_session(
 
 
 async def take_screenshot(
-    browser: BridgeBrowser,
+    browser: MithwireBrowser,
     *,
     output_path: str,
     full_page: bool = False,

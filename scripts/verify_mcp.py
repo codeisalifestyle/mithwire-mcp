@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stealth verification harness for mithwire-mcp.
 
-Drives a real ``BridgeBrowser`` (the exact launch path the MCP uses) against
+Drives a real ``MithwireBrowser`` (the exact launch path the MCP uses) against
 public bot-detection services and asserts the critical signals are clean. Use it
 as a regression check after changing launch/stealth/proxy code.
 
@@ -33,7 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mithwire_mcp.browser import BridgeBrowser  # noqa: E402
+from mithwire_mcp.browser import MithwireBrowser  # noqa: E402
 from mithwire_mcp.proxy import parse_proxy  # noqa: E402
 
 SUSPECT_SCORE_THRESHOLD = 20
@@ -50,7 +50,7 @@ class Check:
 class ResponseCapture:
     """Capture a JSON API response body via CDP network interception."""
 
-    def __init__(self, browser: BridgeBrowser, url_substring: str):
+    def __init__(self, browser: MithwireBrowser, url_substring: str):
         self._tab = browser.tab
         self._net = browser._cdp_network
         self._needle = url_substring
@@ -90,7 +90,7 @@ class ResponseCapture:
         return self._result
 
 
-async def check_deviceinfo(browser: BridgeBrowser, timeout: float) -> list[Check]:
+async def check_deviceinfo(browser: MithwireBrowser, timeout: float) -> list[Check]:
     await browser.goto("https://deviceandbrowserinfo.com/are_you_a_bot", wait_seconds=3.0)
     data: dict | None = None
     for _ in range(int(timeout)):
@@ -128,7 +128,7 @@ async def check_deviceinfo(browser: BridgeBrowser, timeout: float) -> list[Check
     return checks
 
 
-async def check_fingerprint(browser: BridgeBrowser, timeout: float, has_proxy: bool) -> list[Check]:
+async def check_fingerprint(browser: MithwireBrowser, timeout: float, has_proxy: bool) -> list[Check]:
     capture = ResponseCapture(browser, "demo.fingerprint.com/api/event/")
     await capture.setup()
     await browser.goto("https://demo.fingerprint.com/playground", wait_seconds=3.0)
@@ -177,7 +177,7 @@ _SUCCESS_PROBE = (
 )
 
 
-async def check_turnstile(browser: BridgeBrowser, timeout: float) -> list[Check]:
+async def check_turnstile(browser: MithwireBrowser, timeout: float) -> list[Check]:
     await browser.goto(TURNSTILE_URL, wait_seconds=4.0)
 
     # Exercise the exact reforged solver the MCP/engine ships. It runs its own
@@ -211,7 +211,7 @@ SITES = {
 
 async def run(args) -> int:
     proxy_config = parse_proxy(args.proxy) if args.proxy else None
-    browser = BridgeBrowser(headless=args.headless, proxy=proxy_config)
+    browser = MithwireBrowser(headless=args.headless, proxy=proxy_config)
     print(f"launching (headless={args.headless}, proxy={'yes' if proxy_config else 'no'})")
     await browser.start()
     try:

@@ -1,6 +1,6 @@
 """Runtime-level tests for the pre-launch proxy preflight + identity defaults.
 
-These tests stub out ``BridgeBrowser`` so the manager never spawns a real
+These tests stub out ``MithwireBrowser`` so the manager never spawns a real
 Chromium, then assert two things:
 
 1. If a proxy is configured and the preflight probe fails, ``start_session``
@@ -36,7 +36,7 @@ _EGRESS_DE = {
 
 
 class _StubBrowser:
-    """Drop-in for ``BridgeBrowser`` that captures what runtime asked for."""
+    """Drop-in for ``MithwireBrowser`` that captures what runtime asked for."""
 
     instances: list[_StubBrowser] = []
 
@@ -113,7 +113,7 @@ class _StubBrowser:
 
 def _patch_browser():
     return patch(
-        "mithwire_mcp.runtime.BridgeBrowser",
+        "mithwire_mcp.runtime.MithwireBrowser",
         side_effect=lambda **kwargs: _StubBrowser(**kwargs),
     )
 
@@ -184,7 +184,7 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
                     proxy="http://user:pw@1.2.3.4:8080",
                 )
         self.assertIn("simulated 407", str(ctx.exception))
-        # No BridgeBrowser must have been constructed at all.
+        # No MithwireBrowser must have been constructed at all.
         self.assertEqual(_StubBrowser.instances, [])
         sessions = await self.manager.list_sessions()
         self.assertEqual(sessions, [])
@@ -291,7 +291,7 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
     async def test_dict_form_proxy_carries_rotation_url_through_to_browser(self) -> None:
         # session_start's ``proxy`` accepts a dict; the rotation_url it
         # contains must survive normalization and arrive on the live
-        # BridgeBrowser's ProxyConfig (in-memory, verbatim) so a future
+        # MithwireBrowser's ProxyConfig (in-memory, verbatim) so a future
         # rotation tool can use it.
         observers, url = _patch_observers_and_url()
         with _patch_browser(), observers, url, patch(

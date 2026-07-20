@@ -1,4 +1,4 @@
-"""Tests for ``BridgeBrowser.align_timezone_to_proxy``'s retry-with-backoff.
+"""Tests for ``MithwireBrowser.align_timezone_to_proxy``'s retry-with-backoff.
 
 The alignment step queries ``api.ipapi.is`` through the proxy once at session
 start and pins the browser timezone to the egress IP's. Mobile / residential
@@ -20,7 +20,7 @@ import unittest
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-from mithwire_mcp.browser import BridgeBrowser
+from mithwire_mcp.browser import MithwireBrowser
 from mithwire_mcp.proxy import parse_proxy
 
 
@@ -63,14 +63,14 @@ class _FakeTab:
 class _PatchedAligner:
     """Context manager that stubs out the three seams the aligner depends on:
 
-    - ``BridgeBrowser.goto``        -> async no-op (no real navigation)
-    - ``BridgeBrowser.apply_timezone_override`` -> async recorder
+    - ``MithwireBrowser.goto``        -> async no-op (no real navigation)
+    - ``MithwireBrowser.apply_timezone_override`` -> async recorder
     - ``asyncio.sleep`` in the browser module -> async no-op (skip real backoff)
 
     Yielding the recorder lets each test assert which timezone was actually
     pinned (or that the pin step never ran because all attempts failed)."""
 
-    def __init__(self, browser: BridgeBrowser) -> None:
+    def __init__(self, browser: MithwireBrowser) -> None:
         self.browser = browser
         self.applied: list[str] = []
 
@@ -78,9 +78,9 @@ class _PatchedAligner:
         async def _apply(tz: str) -> None:
             self.applied.append(tz)
 
-        self._goto = patch.object(BridgeBrowser, "goto", new=AsyncMock(return_value=None))
+        self._goto = patch.object(MithwireBrowser, "goto", new=AsyncMock(return_value=None))
         self._apply = patch.object(
-            BridgeBrowser, "apply_timezone_override", new=AsyncMock(side_effect=_apply)
+            MithwireBrowser, "apply_timezone_override", new=AsyncMock(side_effect=_apply)
         )
         # Patch the ``asyncio.sleep`` reference in the browser module, not the
         # global one -- patching the global slows the WHOLE test process.
@@ -96,12 +96,12 @@ class _PatchedAligner:
         self._goto.stop()
 
 
-def _browser_with_proxy(bodies: list[Any]) -> BridgeBrowser:
-    """Construct a BridgeBrowser wired up just enough for align to run.
+def _browser_with_proxy(bodies: list[Any]) -> MithwireBrowser:
+    """Construct a MithwireBrowser wired up just enough for align to run.
 
     No real Chrome is started. The aligner short-circuits if either ``proxy``
     or ``tab`` is None, so we only need a parsed ProxyConfig and a FakeTab."""
-    browser = BridgeBrowser(headless=True, proxy=parse_proxy("http://1.2.3.4:8080"))
+    browser = MithwireBrowser(headless=True, proxy=parse_proxy("http://1.2.3.4:8080"))
     browser.tab = _FakeTab(bodies)  # type: ignore[assignment]
     return browser
 
@@ -109,7 +109,7 @@ def _browser_with_proxy(bodies: list[Any]) -> BridgeBrowser:
 class AlignTimezoneRetryTest(unittest.IsolatedAsyncioTestCase):
     async def test_no_proxy_short_circuits(self) -> None:
         # No proxy -> nothing to align to. Method must not perform any work.
-        browser = BridgeBrowser(headless=True)
+        browser = MithwireBrowser(headless=True)
         browser.tab = _FakeTab([])  # type: ignore[assignment]
         with _PatchedAligner(browser) as ctx:
             result = await browser.align_timezone_to_proxy()
@@ -156,7 +156,7 @@ class AlignTimezoneRetryTest(unittest.IsolatedAsyncioTestCase):
                     raise RuntimeError("transient proxy failure")
                 return await super().evaluate(expr, *args, **kwargs)
 
-        browser = BridgeBrowser(headless=True, proxy=parse_proxy("http://1.2.3.4:8080"))
+        browser = MithwireBrowser(headless=True, proxy=parse_proxy("http://1.2.3.4:8080"))
         browser.tab = _FlakyTab()  # type: ignore[assignment]
         with _PatchedAligner(browser) as ctx:
             result = await browser.align_timezone_to_proxy(attempts=3)

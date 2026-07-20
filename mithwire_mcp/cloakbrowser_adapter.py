@@ -53,7 +53,7 @@ def require_platform() -> None:
         os_name = platform.system()
         raise ValueError(
             f"engine='stealth' requires Linux or macOS (current: {os_name}). "
-            "Use engine='stock' (default) on this platform, which applies "
+            "Use engine='cdp' (default) on this platform, which applies "
             "Mithwire's CDP/JS stealth patches."
         )
 
@@ -183,7 +183,7 @@ def build_launch_config(
     license_key: str | None = None,
     extra_args: list[str] | None = None,
 ) -> tuple[str, list[str]]:
-    """Return ``(binary_path, args_list)`` ready for BridgeBrowser.
+    """Return ``(binary_path, args_list)`` ready for MithwireBrowser.
 
     This is the main entry point: resolves the binary, translates the
     fingerprint, and assembles the full argument list.

@@ -10,7 +10,7 @@ spawned and refuse to launch on failure.
 The probe issues a ``GET`` to ``api.ipapi.is`` **through the proxy**, with
 credentials when present. The same response is the canonical source we use to
 derive the default identity (timezone, language, geo) — so the probe doubles
-as the egress-info lookup that ``BridgeBrowser`` used to do *after* launch
+as the egress-info lookup that ``MithwireBrowser`` used to do *after* launch
 via ``align_timezone_to_proxy``. Doing it pre-launch means we never need to
 do it again, and a bad proxy fails fast with no half-launched browser to
 clean up.

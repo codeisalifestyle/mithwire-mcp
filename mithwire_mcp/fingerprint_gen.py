@@ -78,7 +78,7 @@ def generate(
         Primary locale (e.g. ``"en-US"``). Passed through to BrowserForge.
     include_ua : bool
         Whether to include a generated user-agent string. Defaults to False
-        because in stock mode the actual Chrome binary's version-specific
+        because in CDP mode the actual Chrome binary's version-specific
         behaviours would contradict a BrowserForge-generated UA (e.g. Chrome
         147 claimed vs Chrome 150 actual). Set True only when the caller
         controls the binary version (e.g. stealth/CloakBrowser mode).
