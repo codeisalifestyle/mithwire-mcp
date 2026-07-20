@@ -163,9 +163,7 @@ def create_server(
             "Launch a new, isolated browser. By default it is ephemeral (no saved "
             "state) and headful. Pass profile=<name> to launch a persistent managed "
             "profile whose cookies/storage survive across runs. Optional: headless, "
-            "proxy, proxy_ref, start_url, cookie_file (one-shot cookie injection), "
-            "preset (apply a saved launch recipe; overrides the profile's own preset "
-            "for this run only). "
+            "proxy, proxy_ref, start_url, cookie_file (one-shot cookie injection). "
             "engine selects the browser engine: 'stock' (default) uses the system "
             "Chrome with Mithwire CDP/JS patches; 'stealth' uses a CloakBrowser "
             "binary with C++ source-level fingerprint patches for zero-lie stealth "
@@ -206,7 +204,6 @@ def create_server(
         cookie_file: str | None = None,
         cookie_fallback_domain: str | None = None,
         profile: str | None = None,
-        preset: str | None = None,
         proxy: str | dict[str, Any] | None = None,
         proxy_ref: str | None = None,
         fingerprint: dict[str, Any] | None = None,
@@ -223,7 +220,6 @@ def create_server(
             cookie_file=cookie_file,
             cookie_fallback_domain=cookie_fallback_domain,
             profile=profile,
-            preset=preset,
             proxy=proxy,
             proxy_ref=proxy_ref,
             fingerprint=fingerprint,
@@ -295,7 +291,7 @@ def create_server(
 
     @mcp.tool(
         name="session_state_paths",
-        description="Get centralized directories used for profiles, presets, proxies, and cookies.",
+        description="Get centralized directories used for profiles, proxies, and cookies.",
     )
     async def session_state_paths() -> dict[str, Any]:
         return await manager.get_state_paths()
@@ -311,16 +307,15 @@ def create_server(
     @mcp.tool(
         name="session_profile_set",
         description=(
-            "Create or update a saved profile. ``preset`` (optional) names a shared "
-            "launch recipe in the preset registry the profile inherits from. "
-            "``launch_options`` (optional) is a dict of per-profile overrides on top "
-            "of the preset, keyed by the same fields session_start accepts (headless, "
-            "start_url, browser_args, sandbox, fingerprint, proxy, proxy_ref, "
-            "cookie_file, cookie_fallback_domain, webrtc_leak_protection, "
-            "browser_executable_path, user_data_dir, engine). "
+            "Create or update a saved profile. ``launch_options`` (optional) is a "
+            "dict of per-profile launch settings keyed by the same fields "
+            "session_start accepts (headless, start_url, browser_args, sandbox, "
+            "fingerprint, proxy, proxy_ref, cookie_file, cookie_fallback_domain, "
+            "webrtc_leak_protection, browser_executable_path, user_data_dir, "
+            "engine). "
             "``fingerprint`` (optional dict) is the profile's persisted browser "
             "identity — generated automatically on first launch if not set, but "
-            "can be set/overridden here. It takes precedence over preset/launch_options "
+            "can be set/overridden here. It takes precedence over launch_options "
             "fingerprint fields in the merge chain. "
             "``proxy_ref`` (optional string) binds a proxy registry entry to the "
             "profile as its default proxy. Overrides any proxy_ref in launch_options. "
@@ -331,7 +326,6 @@ def create_server(
         profile: str,
         description: str | None = None,
         account_aliases: list[str] | None = None,
-        preset: str | None = None,
         launch_options: dict[str, Any] | None = None,
         fingerprint: dict[str, Any] | None = None,
         proxy_ref: str | None = None,
@@ -341,7 +335,6 @@ def create_server(
             profile=profile,
             description=description,
             account_aliases=account_aliases,
-            preset=preset,
             launch_options=launch_options,
             fingerprint=fingerprint,
             proxy_ref=proxy_ref,
@@ -381,51 +374,6 @@ def create_server(
         )
 
     @mcp.tool(
-        name="session_preset_list",
-        description="List saved launch presets (shared recipes profiles can inherit).",
-    )
-    async def session_preset_list() -> dict[str, Any]:
-        return await manager.list_presets()
-
-    @mcp.tool(
-        name="session_preset_get",
-        description="Get one preset by name.",
-    )
-    async def session_preset_get(preset_name: str) -> dict[str, Any]:
-        return await manager.get_preset(preset_name=preset_name)
-
-    @mcp.tool(
-        name="session_preset_set",
-        description=(
-            "Create or update a preset. ``values`` accepts the same fields "
-            "session_start does (headless, start_url, browser_args, sandbox, "
-            "fingerprint, proxy, proxy_ref, cookie_file, cookie_fallback_domain, "
-            "webrtc_leak_protection, browser_executable_path, user_data_dir, "
-            "engine). "
-            "Profiles point at a preset by setting ``preset: <name>`` in "
-            "session_profile_set; session_start can also pass preset=<name> to "
-            "override the profile's own preset for one run."
-        ),
-    )
-    async def session_preset_set(
-        preset_name: str,
-        values: dict[str, Any] | None = None,
-        merge: bool = True,
-    ) -> dict[str, Any]:
-        return await manager.set_preset(
-            preset_name=preset_name,
-            values=values,
-            merge=merge,
-        )
-
-    @mcp.tool(
-        name="session_preset_delete",
-        description="Delete a preset by name.",
-    )
-    async def session_preset_delete(preset_name: str) -> dict[str, Any]:
-        return await manager.delete_preset(preset_name=preset_name)
-
-    @mcp.tool(
         name="session_proxy_list",
         description="List saved proxy registry entries.",
     )
@@ -447,7 +395,7 @@ def create_server(
             "rotation_url, tags}) or a single ``server`` URL ({server: "
             "'http://user:pw@host:port', rotation_url, tags}). The persisted "
             "form is always discrete fields; ``server`` is decomposed at write. "
-            "Profiles, presets, and session_start reference the entry by name "
+            "Profiles and session_start reference the entry by name "
             "via the ``proxy_ref`` field."
         ),
     )
@@ -1532,7 +1480,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--state-root",
         default=None,
         help=(
-            "Optional root directory for centralized profiles/presets/proxies/cookies. "
+            "Optional root directory for centralized profiles/proxies/cookies. "
             "Defaults to ~/.mithwire-mcp or $MITHWIRE_MCP_HOME."
         ),
     )
@@ -1697,7 +1645,6 @@ def _warmup_cli(argv: list[str]) -> int:
             cookie_file=None,
             cookie_fallback_domain=None,
             profile=args.profile,
-            preset=None,
         )
         session_id = session_info["session_id"]
         try:

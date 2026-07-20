@@ -17,7 +17,6 @@
   "webgl_vendor": "Google Inc. (Apple)",
   "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)",
   "source": {
-    "preset": "mac-uk-residential",
     "notes": "same-OS-family Mac/London identity; pairs cleanly with a UK residential or mobile exit"
   }
 }

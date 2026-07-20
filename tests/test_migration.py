@@ -1,4 +1,4 @@
-"""Legacy-layout migration: configs/ -> presets/ and profile.json shape rewrite."""
+"""Legacy-layout migration: preset absorption and profile.json shape rewrite."""
 
 from __future__ import annotations
 
@@ -46,23 +46,7 @@ def _write_legacy_layout(root: Path) -> None:
 
 
 class MigrationTest(unittest.TestCase):
-    def test_renames_configs_to_presets(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            _write_legacy_layout(root)
-
-            store = BrowserStateStore(state_root=str(root))
-
-            # Legacy configs/ directory must be gone, contents preserved
-            # under presets/ with the same filenames.
-            self.assertFalse((root / "configs").exists())
-            self.assertTrue((root / "presets" / "mac-us.json").exists())
-            preset = store.get_preset("mac-us")
-            self.assertTrue(preset["exists"])
-            self.assertTrue(preset["values"]["headless"])
-            self.assertEqual(preset["values"]["browser_args"], ["--lang=en-US"])
-
-    def test_rewrites_profile_keys(self) -> None:
+    def test_absorbs_legacy_config_into_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             _write_legacy_layout(root)
@@ -70,23 +54,26 @@ class MigrationTest(unittest.TestCase):
             store = BrowserStateStore(state_root=str(root))
             payload = store.resolve_profile_reference("alice")
 
-            # New keys are populated and old ones are gone from disk.
-            self.assertEqual(payload["preset"], "mac-us")
+            self.assertFalse((root / "presets").exists())
             self.assertFalse(payload["launch_options"]["headless"])
+            self.assertEqual(payload["launch_options"]["browser_args"], ["--lang=en-US"])
             self.assertEqual(
                 payload["launch_options"]["fingerprint"]["timezone_id"],
                 "America/New_York",
             )
-            # Legacy keys are not exposed.
-            self.assertNotIn("launch_config", payload)
-            self.assertNotIn("launch_overrides", payload)
 
+    def test_rewrites_profile_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_legacy_layout(root)
+
+            BrowserStateStore(state_root=str(root))
             on_disk = json.loads(
                 (root / "profiles" / "alice" / "profile.json").read_text(encoding="utf-8")
             )
             self.assertNotIn("launch_config", on_disk)
             self.assertNotIn("launch_overrides", on_disk)
-            self.assertEqual(on_disk["preset"], "mac-us")
+            self.assertNotIn("preset", on_disk)
             self.assertIn("launch_options", on_disk)
 
     def test_migration_is_idempotent(self) -> None:
@@ -95,8 +82,6 @@ class MigrationTest(unittest.TestCase):
             _write_legacy_layout(root)
 
             BrowserStateStore(state_root=str(root))
-            # Mutate the migrated profile.json to confirm a second
-            # construction doesn't trample updated content.
             alice_meta = root / "profiles" / "alice" / "profile.json"
             data = json.loads(alice_meta.read_text(encoding="utf-8"))
             data["description"] = "Alice (updated)"
@@ -106,21 +91,32 @@ class MigrationTest(unittest.TestCase):
             payload = store2.resolve_profile_reference("alice")
             self.assertEqual(payload["description"], "Alice (updated)")
 
-    def test_does_not_overwrite_existing_preset(self) -> None:
-        # If both legacy configs/foo.json and presets/foo.json exist, the
-        # already-new presets/foo.json wins (we never silently merge).
+    def test_profile_launch_options_override_preset_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            _write_legacy_layout(root)
-            (root / "presets").mkdir(parents=True, exist_ok=True)
-            (root / "presets" / "mac-us.json").write_text(
-                json.dumps({"headless": False}),
+            presets = root / "presets"
+            presets.mkdir(parents=True, exist_ok=True)
+            (presets / "mac-us.json").write_text(
+                json.dumps({"headless": True, "start_url": "https://preset.example.com"}),
+                encoding="utf-8",
+            )
+            profile_dir = root / "profiles" / "bob"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            (profile_dir / "profile.json").write_text(
+                json.dumps(
+                    {
+                        "preset": "mac-us",
+                        "launch_options": {"headless": False},
+                    }
+                ),
                 encoding="utf-8",
             )
 
             store = BrowserStateStore(state_root=str(root))
-            preset = store.get_preset("mac-us")
-            self.assertFalse(preset["values"]["headless"])
+            payload = store.resolve_profile_reference("bob")
+            self.assertFalse(payload["launch_options"]["headless"])
+            self.assertEqual(payload["launch_options"]["start_url"], "https://preset.example.com")
+            self.assertFalse((root / "presets").exists())
 
 
 if __name__ == "__main__":

@@ -9,9 +9,9 @@ cannot satisfy alone:
 * **Visibility**: emit a human-readable report so a user upgrading across
   multiple releases can see exactly what the legacy layout looked like and what
   changed on disk.
-* **Default-preset advisory**: ``configs/default.json`` used to auto-apply as a
-  baseline for every session. Its successor ``presets/default.json`` does NOT
-  — it must be linked from a profile via ``preset: "default"``. Migration logs
+* **Preset absorption advisory**: legacy ``presets/`` recipes and
+  ``configs/`` launch templates are merged into each profile's
+  ``launch_options`` and the shared directories are removed. Migration logs
   this once so the behavioural difference is never silently dropped.
 * **Inlined-proxy extraction**: in the old model, presets and profiles often
   inlined the same proxy credentials in multiple places. The plan's
@@ -19,7 +19,8 @@ cannot satisfy alone:
   command lists the candidates and, with ``--extract-proxies``, writes the
   registry entries and rewrites the call-sites to reference them.
 
-The command is idempotent and safe to re-run.
+The command is idempotent and safe to re-run. Its main purpose is: proxy
+extraction + preset absorption + legacy layout rewrite.
 """
 
 from __future__ import annotations
@@ -203,23 +204,24 @@ def _find_inlined_proxies(state_root: Path) -> list[_InlinedProxy]:
                 continue
             if not isinstance(raw, dict):
                 continue
-            launch = raw.get("launch_options")
-            if not isinstance(launch, dict):
-                continue
-            proxy = launch.get("proxy")
-            if _is_inlined_proxy_dict(proxy):
-                sig = _proxy_signature(proxy)
-                if sig is None:
+            for container_name in ("launch_options", "launch_overrides"):
+                launch = raw.get(container_name)
+                if not isinstance(launch, dict):
                     continue
-                candidates.append(
-                    _InlinedProxy(
-                        location=f"profile:{entry.name}",
-                        file_path=meta,
-                        container_key=("launch_options",),
-                        spec=dict(proxy),
-                        signature=sig,
+                proxy = launch.get("proxy")
+                if _is_inlined_proxy_dict(proxy):
+                    sig = _proxy_signature(proxy)
+                    if sig is None:
+                        continue
+                    candidates.append(
+                        _InlinedProxy(
+                            location=f"profile:{entry.name}",
+                            file_path=meta,
+                            container_key=(container_name,),
+                            spec=dict(proxy),
+                            signature=sig,
+                        )
                     )
-                )
     return candidates
 
 
@@ -229,6 +231,41 @@ def _find_inlined_proxies(state_root: Path) -> list[_InlinedProxy]:
 
 
 _NAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _rewrite_inlined_proxy_reference(
+    entry: _InlinedProxy,
+    *,
+    proxy_name: str,
+) -> bool:
+    """Replace an inlined ``proxy`` dict with ``proxy_ref`` in a source file.
+
+    Returns True when a file was rewritten. Legacy ``launch_overrides`` keys
+    are mapped to ``launch_options`` when the state store has already run.
+    """
+    if not entry.file_path.exists():
+        return False
+    raw = json.loads(entry.file_path.read_text(encoding="utf-8"))
+    container_key = list(entry.container_key)
+    if (
+        container_key == ["launch_overrides"]
+        and "launch_overrides" not in raw
+        and isinstance(raw.get("launch_options"), dict)
+    ):
+        container_key = ["launch_options"]
+
+    container = raw
+    for key in container_key:
+        if not isinstance(container, dict) or key not in container:
+            return False
+        container = container[key]
+
+    if not isinstance(container, dict):
+        return False
+    container.pop("proxy", None)
+    container["proxy_ref"] = proxy_name
+    secure_write_text(entry.file_path, json.dumps(raw, ensure_ascii=True, indent=2))
+    return True
 
 
 def _auto_proxy_name(
@@ -301,6 +338,7 @@ class MigrationReport:
     legacy_configs_renamed: list[str] = field(default_factory=list)
     legacy_configs_skipped: list[str] = field(default_factory=list)
     profiles_rewritten: list[str] = field(default_factory=list)
+    presets_absorbed: list[str] = field(default_factory=list)
     default_advisory: bool = False
     inlined_proxies_seen: int = 0
     extracted_proxies: list[dict[str, Any]] = field(default_factory=list)
@@ -314,6 +352,7 @@ class MigrationReport:
             "legacy_configs_renamed": self.legacy_configs_renamed,
             "legacy_configs_skipped": self.legacy_configs_skipped,
             "profiles_rewritten": self.profiles_rewritten,
+            "presets_absorbed": self.presets_absorbed,
             "default_advisory": self.default_advisory,
             "inlined_proxies_seen": self.inlined_proxies_seen,
             "extracted_proxies": self.extracted_proxies,
@@ -328,19 +367,25 @@ class MigrationReport:
         lines.append(header)
 
         any_layout_change = bool(
-            self.legacy_configs_renamed or self.profiles_rewritten
+            self.legacy_configs_renamed
+            or self.profiles_rewritten
+            or self.presets_absorbed
         )
         if not any_layout_change:
             lines.append("Layout: already current — nothing to migrate.")
         else:
+            if self.presets_absorbed:
+                names = ", ".join(self.presets_absorbed)
+                lines.append(
+                    f"Absorbed presets/ into profile launch_options: {names}"
+                )
             if self.legacy_configs_renamed:
                 names = ", ".join(self.legacy_configs_renamed)
-                lines.append(f"Renamed configs/ -> presets/: {names}")
+                lines.append(f"Referenced legacy configs/ templates: {names}")
             if self.legacy_configs_skipped:
                 names = ", ".join(self.legacy_configs_skipped)
                 lines.append(
-                    f"Kept existing presets/ over legacy configs/: {names} "
-                    "(no silent merge; resolve manually if needed)"
+                    f"Kept existing profile launch_options over legacy configs/: {names}"
                 )
             if self.profiles_rewritten:
                 names = ", ".join(self.profiles_rewritten)
@@ -348,9 +393,9 @@ class MigrationReport:
 
         if self.default_advisory:
             lines.append(
-                "Note: presets/default.json is no longer applied as a baseline. "
-                'Link it from individual profiles via preset: "default", or move '
-                "its values inline."
+                "Note: presets/default.json (or configs/default.json) is no longer "
+                "applied as a baseline. Its values were merged into profiles that "
+                "referenced it; move any remaining defaults inline in launch_options."
             )
 
         if self.inlined_proxies_seen:
@@ -455,29 +500,26 @@ def _apply_and_report(
         p.stem for p in (root / "presets").glob("*.json")
     } if (root / "presets").is_dir() else set()
 
-    store = BrowserStateStore(state_root=str(root))
+    # Scan for inlined proxies before auto-migration removes presets/.
+    inlined = _find_inlined_proxies(root)
 
-    post_presets = {p.stem for p in store.presets_dir.glob("*.json")}
-    moved = sorted(post_presets & set(legacy.legacy_configs) - pre_existing_presets)
-    skipped = sorted(set(legacy.legacy_configs) & pre_existing_presets)
+    BrowserStateStore(state_root=str(root))
 
     report = MigrationReport(
         state_root=display_root,
         dry_run=dry_run,
-        legacy_configs_renamed=moved,
-        legacy_configs_skipped=skipped,
         profiles_rewritten=list(legacy.profiles_needing_rewrite),
-        default_advisory=(store.presets_dir / "default.json").exists(),
+        presets_absorbed=sorted(pre_existing_presets),
+        default_advisory=legacy.default_present,
     )
-
-    inlined = _find_inlined_proxies(root)
     report.inlined_proxies_seen = len(inlined)
 
     if not extract_proxies or not inlined:
         return report
 
+    store = BrowserStateStore(state_root=str(root))
+
     # Group by credential signature so identical inlinings collapse to one
-    # registry entry, used by every call-site that shared the credentials.
     groups: dict[tuple[str, str, int, str, str, str], list[_InlinedProxy]] = {}
     for entry in inlined:
         groups.setdefault(entry.signature, []).append(entry)
@@ -519,13 +561,7 @@ def _apply_and_report(
         # Rewrite each source file to drop the inlined ``proxy`` and add
         # ``proxy_ref``. Atomic per-file via ``secure_write_text``.
         for entry in entries:
-            raw = json.loads(entry.file_path.read_text(encoding="utf-8"))
-            container = raw
-            for key in entry.container_key:
-                container = container[key]
-            container.pop("proxy", None)
-            container["proxy_ref"] = name
-            secure_write_text(entry.file_path, json.dumps(raw, ensure_ascii=True, indent=2))
+            _rewrite_inlined_proxy_reference(entry, proxy_name=name)
 
         report.extracted_proxies.append(
             {
@@ -547,7 +583,7 @@ def build_migrate_parser() -> argparse.ArgumentParser:
         prog="mithwire-mcp migrate-state",
         description=(
             "Bring an existing ~/.mithwire-mcp state root up to the current "
-            "layout (configs/ -> presets/, profile.json rewrite) and "
+            "layout (absorb presets/ into profiles, rewrite profile.json) and "
             "optionally extract inlined proxies into the proxies/ registry. "
             "Idempotent — safe to re-run."
         ),

@@ -146,7 +146,6 @@ class LaunchCookieFileResolutionTest(unittest.TestCase):
         )
         return manager._resolve_launch_context(  # noqa: SLF001
             profile="alice",
-            preset=None,
             headless=None,
             start_url=None,
             browser_args=None,

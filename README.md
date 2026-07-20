@@ -55,9 +55,10 @@ Built for 🕸️ autonomous agents, 🧲 scraping pipelines, 👥 multi-account
 - 🔭 Live operational visibility: console output, request metadata, and CDP-level network capture.
 
 ### 👤 Durable identity & state
-- 🗂️ Reusable browser state in one place: `profiles/` and `configs/` under a single state root.
+- 🗂️ Reusable browser state in one place: `profiles/` and `proxies/` under a single state root.
 - 🍪 A managed `profile` persists cookies and storage natively across runs — no separate cookie bookkeeping.
-- 🎛️ Tune launch behavior: browser flags, executable path, headless/sandbox, and first-class proxy support (incl. authenticated HTTP/HTTPS).
+- 🎛️ Tune launch behavior per profile: browser flags, executable path, headless/sandbox, and first-class proxy support (incl. authenticated HTTP/HTTPS).
+- 🧬 **Persistent fingerprints**: profiles auto-generate and persist a statistically plausible fingerprint (via BrowserForge) on first launch, ensuring consistent identity across sessions.
 
 ### 🕵️ Stealth that stays consistent across the fleet
 - 🥷 Powered by `mithwire`: no-WebDriver/no-Selenium Chromium control, with Cloudflare Turnstile solving (`browser_solve_cloudflare`).
@@ -153,7 +154,6 @@ Everything else is an optional flag on top of those two:
 | `start_url` | none | Navigate here right after launch. |
 | `cookie_file` | none | One-shot injection of cookies from a JSON file at launch. |
 | `sandbox` | `true` | Keep Chromium's sandbox on (recommended; `--no-sandbox` is easily bot-detected). |
-| `preset` | none | Apply a named preset (a shared bundle of launch settings stored under `presets/<name>.json`). |
 | `proxy_ref` | none | Use a named entry from the proxy registry instead of inlining credentials in `proxy`. |
 
 ### 🌍 Proxy support
@@ -225,12 +225,12 @@ The `cloakbrowser` package auto-downloads the binary on first use and caches it 
 
 In stealth mode, Mithwire still applies CDP timezone, locale, geolocation, and Accept-Language overrides (these complement rather than conflict with the binary's patches), and the full proxy integration (relay, health check, identity alignment, rotation) works identically.
 
-**Recommended stealth preset.** Create a preset that combines the stealth engine with sensible defaults:
+**Recommended stealth profile.** Create a profile that combines the stealth engine with sensible defaults:
 
 ```
-session_preset_set(
-  preset_name="stealth-linux",
-  values={
+session_profile_set(
+  profile="stealth-linux",
+  launch_options={
     "engine": "stealth",
     "headless": true,
     "webrtc_leak_protection": "filter"
@@ -238,7 +238,7 @@ session_preset_set(
 )
 ```
 
-Then launch sessions with `session_start(preset="stealth-linux")` or attach it to profiles via `session_profile_set(profile="my-identity", preset="stealth-linux")`.
+Then launch sessions with `session_start(profile="stealth-linux")`.
 
 ### 🎭 Fingerprint / identity spoofing
 
@@ -315,19 +315,18 @@ Layout under that root:
 
 ```
 ~/.mithwire-mcp/
-├── profiles/<name>/        # Chromium user-data dir + profile.json metadata
-├── presets/<name>.json     # opt-in shared launch recipes (e.g. mac-us)
-├── proxies/<name>.json     # first-class proxy registry (creds + rotation_url)
+├── profiles/<name>/        # Chromium user-data dir + profile.json (identity + launch defaults)
+├── proxies/<name>.json     # proxy registry (credentials + rotation_url)
 └── cookies/                # one-shot cookie injection / export files
 ```
 
-`session_start` resolves launch settings in **four** layers, lowest precedence first:
+A **profile** is the complete browser identity: a persisted fingerprint, a bound proxy (via `proxy_ref`), per-profile launch defaults, Chromium user-data (cookies, localStorage, history), and lifecycle metadata (`launch_count`, `last_launched_at`, `warming_status`).
+
+`session_start` resolves launch settings in **three** layers, lowest precedence first:
 
 1. Built-in defaults
-2. Effective preset values (the session's `preset` arg if given, else the
-   profile's `preset` field — never both at once)
-3. The profile's `launch_options` (per-profile overrides)
-4. Explicit `session_start` arguments
+2. Profile (identity: fingerprint + proxy_ref, plus `launch_options` defaults)
+3. Explicit `session_start` arguments
 
 After merging, `proxy_ref` (if set anywhere in the chain) is expanded against
 the proxy registry — unless a literal `proxy` was supplied at the same or
@@ -357,10 +356,15 @@ endpoints). Store credentials once, reference them by name:
 {
   "description": "Alice",
   "account_aliases": ["alice@example.com"],
-  "preset": "mac-us",
+  "proxy_ref": "oxy-us",
+  "fingerprint": {
+    "timezone_id": "America/New_York",
+    "platform": "MacIntel",
+    "hardware_concurrency": 8
+  },
   "launch_options": {
-    "proxy_ref": "oxy-us",
-    "fingerprint": { "timezone_id": "America/New_York" }
+    "headless": true,
+    "engine": "stealth"
   }
 }
 ```
@@ -372,18 +376,18 @@ browser, no silent fallback to the host's direct connection.
 
 ### 🔄 Migration from older layouts
 
-On startup the state store transparently fixes up the previous schema:
+On startup the state store transparently fixes up previous schemas:
 
-- `~/.mithwire-mcp/configs/` → `~/.mithwire-mcp/presets/` (file moves, no
-  silent merge if the destination already exists).
+- Legacy `configs/` and `presets/` directories are absorbed: for each profile
+  that referenced a preset, the preset's values are merged into the profile's
+  `launch_options` and the `preset` key is removed. The `presets/` directory
+  is then cleaned up.
 - `profile.json`: the old `launch_config` and `launch_overrides` keys are
-  rewritten to `preset` and `launch_options` respectively, in place. Atomic
-  and idempotent — safe to re-run on every server start.
+  rewritten to `launch_options`. Atomic and idempotent — safe to re-run on every
+  server start.
 
-For an **explicit** report (what got renamed, which profiles were rewritten,
-whether a legacy `presets/default.json` is hanging around no-op, and which
-inlined proxies could be deduplicated into the registry) run the dedicated
-subcommand:
+For an **explicit** report (what changed, and which inlined proxies could be
+deduplicated into the registry) run the dedicated subcommand:
 
 ```bash
 # Dry-run: simulate against a temp copy, print the report, change nothing.
@@ -402,12 +406,6 @@ credentials into a single `proxies/<name>.json` and rewrites every call-site
 to reference it by name. Idempotent: re-running after a successful migration
 is a no-op.
 
-> **Note on `default.json`.** In the old layout, `configs/default.json`
-> auto-applied as a baseline for every session. After migration, the renamed
-> `presets/default.json` is **not** applied implicitly — link it from a
-> profile via `"preset": "default"`, or move its values inline. The migration
-> command logs this once so the behavioural difference is never silent.
-
 ## 🧰 Tools exposed
 
 <details>
@@ -415,13 +413,13 @@ is a no-op.
 
 `session_start`, `session_list`, `session_get`, `session_state_paths`,
 `session_profile_list`, `session_profile_get`, `session_profile_set`,
-`session_profile_delete`, `session_preset_list`, `session_preset_get`,
-`session_preset_set`, `session_preset_delete`, `session_proxy_list`,
-`session_proxy_get`, `session_proxy_set`, `session_proxy_delete`,
-`session_set_fingerprint`, `session_rotate_proxy`, `session_set_policy`,
-`session_get_policy`, `session_set_download_dir`, `session_trace_start`,
-`session_trace_stop`, `session_trace_get`, `session_trace_export`,
-`session_trace_replay`, `session_stop`, `session_stop_all`
+`session_profile_regenerate_fingerprint`, `session_profile_delete`,
+`session_proxy_list`, `session_proxy_get`, `session_proxy_set`,
+`session_proxy_delete`, `session_set_fingerprint`, `session_rotate_proxy`,
+`session_set_policy`, `session_get_policy`, `session_set_download_dir`,
+`session_trace_start`, `session_trace_stop`, `session_trace_get`,
+`session_trace_export`, `session_trace_replay`, `session_warmup`,
+`session_stop`, `session_stop_all`
 </details>
 
 <details>

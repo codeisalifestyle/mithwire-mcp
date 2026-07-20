@@ -154,7 +154,6 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile=None,
-                preset=None,
                 proxy=None,
                 fingerprint={"timezone_id": "America/Los_Angeles"},
             )
@@ -182,7 +181,6 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
                     cookie_file=None,
                     cookie_fallback_domain=None,
                     profile=None,
-                    preset=None,
                     proxy="http://user:pw@1.2.3.4:8080",
                 )
         self.assertIn("simulated 407", str(ctx.exception))
@@ -207,7 +205,6 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile=None,
-                preset=None,
                 proxy="http://user:pw@1.2.3.4:8080",
             )
 
@@ -250,7 +247,6 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile=None,
-                preset=None,
                 proxy="http://user:pw@1.2.3.4:8080",
                 fingerprint={"languages": ["en-US", "en"], "timezone_id": "America/Los_Angeles"},
             )
@@ -284,7 +280,6 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile="atlas",
-                preset=None,
                 proxy="http://user:pw@1.2.3.4:8080",
             )
 
@@ -313,7 +308,6 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile=None,
-                preset=None,
                 proxy={
                     "server": "http://1.2.3.4:8080",
                     "username": "u",
@@ -354,7 +348,6 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile=None,
-                preset=None,
                 proxy="socks5://1.2.3.4:1080",
             )
 
@@ -409,7 +402,6 @@ class RotateProxyTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile=None,
-                preset=None,
                 proxy=proxy,
                 fingerprint=fingerprint,
             )

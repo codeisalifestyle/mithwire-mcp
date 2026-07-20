@@ -17,7 +17,6 @@
   "webgl_vendor": "Google Inc. (NVIDIA Corporation)",
   "webgl_renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3060/PCIe/SSE2, OpenGL ES 3.2)",
   "source": {
-    "preset": "linux-us-east",
     "notes": "same-OS-family Linux/NYC identity; common NVIDIA desktop; pairs with US residential exit"
   }
 }

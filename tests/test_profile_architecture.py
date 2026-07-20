@@ -154,7 +154,6 @@ class BackwardCompatibilityTest(unittest.TestCase):
             legacy_metadata = {
                 "description": "Old-style profile",
                 "account_aliases": ["legacy-alias"],
-                "preset": "mac-us",
                 "launch_options": {"headless": True},
                 "created_at": "2025-01-01T00:00:00+00:00",
                 "updated_at": "2025-01-01T00:00:00+00:00",
@@ -187,36 +186,6 @@ class MergeChainProfileIdentityTest(unittest.IsolatedAsyncioTestCase):
     """The persisted fingerprint and bound proxy_ref form a profile identity
     layer that sits between launch_options and explicit session_start args."""
 
-    async def test_persisted_fingerprint_overrides_preset_fingerprint(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            manager = BrowserSessionManager(state_root=tmpdir)
-            await manager.set_preset(
-                preset_name="base",
-                values={"fingerprint": {"timezone_id": "US/Pacific"}},
-            )
-            await manager.set_profile(
-                profile="alice",
-                preset="base",
-                fingerprint={
-                    "timezone_id": "America/New_York",
-                    "platform": "MacIntel",
-                },
-            )
-            context = manager._resolve_launch_context(
-                headless=None,
-                start_url=None,
-                browser_args=None,
-                browser_executable_path=None,
-                sandbox=None,
-                cookie_file=None,
-                cookie_fallback_domain=None,
-                profile="alice",
-                preset=None,
-            )
-            fp = context["values"]["fingerprint"]
-            self.assertEqual(fp["timezone_id"], "America/New_York")
-            self.assertEqual(fp["platform"], "MacIntel")
-
     async def test_persisted_fingerprint_overrides_launch_options_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = BrowserSessionManager(state_root=tmpdir)
@@ -234,7 +203,6 @@ class MergeChainProfileIdentityTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile="bob",
-                preset=None,
             )
             fp = context["values"]["fingerprint"]
             self.assertEqual(fp["timezone_id"], "Europe/London")
@@ -256,7 +224,6 @@ class MergeChainProfileIdentityTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile="alice",
-                preset=None,
                 fingerprint={"timezone_id": "Asia/Tokyo"},
             )
             self.assertEqual(
@@ -283,7 +250,6 @@ class MergeChainProfileIdentityTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile="alice",
-                preset=None,
             )
             proxy = context["values"]["proxy"]
             self.assertIsInstance(proxy, dict)
@@ -314,7 +280,6 @@ class MergeChainProfileIdentityTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile="alice",
-                preset=None,
             )
             self.assertEqual(context["values"]["proxy"]["host"], "bound.example.com")
 
@@ -342,7 +307,6 @@ class MergeChainProfileIdentityTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile="alice",
-                preset=None,
                 proxy_ref="explicit-proxy",
             )
             self.assertEqual(
@@ -367,7 +331,6 @@ class MergeChainProfileIdentityTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile="no-fp",
-                preset=None,
             )
             self.assertFalse(ctx_no["has_persisted_fingerprint"])
 
@@ -380,7 +343,6 @@ class MergeChainProfileIdentityTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile="with-fp",
-                preset=None,
             )
             self.assertTrue(ctx_yes["has_persisted_fingerprint"])
 
@@ -396,35 +358,27 @@ class MergeChainProfileIdentityTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile=None,
-                preset=None,
             )
             self.assertFalse(context["has_persisted_fingerprint"])
 
 
 class MergeChainFullOrderTest(unittest.IsolatedAsyncioTestCase):
-    """Verify the 5-layer merge chain:
-    defaults -> preset -> launch_options -> profile_identity -> explicit."""
+    """Verify the 3-layer merge chain:
+    defaults -> profile (launch_options + identity) -> explicit."""
 
     async def test_full_chain_precedence(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = BrowserSessionManager(state_root=tmpdir)
 
-            await manager.set_preset(
-                preset_name="base",
-                values={
-                    "headless": True,
-                    "start_url": "https://preset.example.com",
-                    "fingerprint": {"timezone_id": "US/Pacific"},
-                },
-            )
             await manager.set_proxy(
                 proxy_name="profile-proxy",
                 values={"scheme": "http", "host": "profile.proxy.com", "port": 3333},
             )
             await manager.set_profile(
                 profile="alice",
-                preset="base",
                 launch_options={
+                    "headless": True,
+                    "start_url": "https://preset.example.com",
                     "sandbox": False,
                     "fingerprint": {"timezone_id": "US/Central"},
                 },
@@ -444,22 +398,16 @@ class MergeChainFullOrderTest(unittest.IsolatedAsyncioTestCase):
                 cookie_file=None,
                 cookie_fallback_domain=None,
                 profile="alice",
-                preset=None,
             )
             values = context["values"]
 
-            # explicit headless=False overrides preset headless=True
             self.assertFalse(values["headless"])
-            # preset start_url (no override above)
             self.assertEqual(values["start_url"], "https://preset.example.com")
-            # launch_options sandbox=False (no explicit override)
             self.assertFalse(values["sandbox"])
-            # profile identity fingerprint overrides preset and launch_options
             self.assertEqual(
                 values["fingerprint"]["timezone_id"], "America/New_York"
             )
             self.assertEqual(values["fingerprint"]["platform"], "MacIntel")
-            # profile's bound proxy_ref expanded
             proxy = values["proxy"]
             self.assertIsInstance(proxy, dict)
             self.assertEqual(proxy["host"], "profile.proxy.com")
