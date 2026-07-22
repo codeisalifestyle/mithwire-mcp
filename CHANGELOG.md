@@ -5,6 +5,13 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.4.1](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.0...v0.4.1) (2026-07-22)
+
+
+### Features
+
+* expose native CDP mouse input tools ([#26](https://github.com/codeisalifestyle/mithwire-mcp/issues/26)) ([a633dcd](https://github.com/codeisalifestyle/mithwire-mcp/commit/a633dcdf1077dae1c50bccc443383f72d480200b))
+
 ## [0.4.0](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.3.2...v0.4.0) (2026-07-20)
 
 
