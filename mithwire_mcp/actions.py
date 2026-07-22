@@ -960,6 +960,58 @@ async def query_selector(
     return payload
 
 
+async def mouse_click_at(
+    browser: MithwireBrowser,
+    *,
+    x: float,
+    y: float,
+    button: str = "left",
+    wait_seconds: float = DEFAULT_ACTION_WAIT_SECONDS,
+) -> dict[str, Any]:
+    """Native CDP coordinate click at viewport pixel (x, y)."""
+    await browser.mouse_click(x, y, button=button)
+    if wait_seconds > 0:
+        await asyncio.sleep(wait_seconds)
+    payload = await get_url_and_title(browser)
+    payload.update({"x": x, "y": y, "button": button})
+    return payload
+
+
+async def mouse_move_to(
+    browser: MithwireBrowser,
+    *,
+    x: float,
+    y: float,
+    steps: int = 10,
+    wait_seconds: float = 0.0,
+) -> dict[str, Any]:
+    """Move cursor to viewport pixel (x, y) via intermediate CDP events."""
+    await browser.mouse_move(x, y, steps=steps)
+    if wait_seconds > 0:
+        await asyncio.sleep(wait_seconds)
+    payload = await get_url_and_title(browser)
+    payload.update({"x": x, "y": y, "steps": steps})
+    return payload
+
+
+async def press_hold_at(
+    browser: MithwireBrowser,
+    *,
+    x: float,
+    y: float,
+    duration_ms: float = 3000.0,
+    wait_seconds: float = DEFAULT_ACTION_WAIT_SECONDS,
+) -> dict[str, Any]:
+    """Sustained mouse press at (x, y) for *duration_ms* milliseconds."""
+    duration_seconds = max(0.1, duration_ms / 1000.0)
+    await browser.press_hold(x, y, duration_seconds=duration_seconds)
+    if wait_seconds > 0:
+        await asyncio.sleep(wait_seconds)
+    payload = await get_url_and_title(browser)
+    payload.update({"x": x, "y": y, "duration_ms": duration_ms})
+    return payload
+
+
 async def click_selector(
     browser: MithwireBrowser,
     *,

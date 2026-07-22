@@ -47,6 +47,9 @@ logger = logging.getLogger(__name__)
 READ_ONLY_BLOCKED_ACTIONS = {
     # Page/state mutation.
     "browser_click",
+    "browser_mouse_click",
+    "browser_mouse_move",
+    "browser_press_hold",
     "browser_type",
     "browser_set_file_input",
     "browser_handle_dialog",

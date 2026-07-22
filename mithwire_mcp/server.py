@@ -31,12 +31,15 @@ from .actions import (
     get_url_and_title,
     handle_dialog,
     list_tabs,
+    mouse_click_at,
+    mouse_move_to,
     navigate_back,
     navigate_forward,
     navigate_to,
     network_capture_status,
     new_tab,
     normalize_evaluate_payload,
+    press_hold_at,
     query_selector,
     reload_page,
     save_cookies,
@@ -823,6 +826,99 @@ def create_server(
             ),
             action_args={
                 "selector": selector,
+                "wait_seconds": wait_seconds,
+            },
+        )
+
+    @mcp.tool(
+        name="browser_mouse_click",
+        description="Native CDP coordinate click at viewport pixel position (x, y). "
+        "Unlike browser_click (which uses a CSS selector and JS el.click()), this "
+        "dispatches Input.dispatchMouseEvent through the browser's input pipeline, "
+        "producing isTrusted events. Use when you need to click by coordinates — "
+        "e.g. inside iframes or at positions obtained from screenshots/evaluation.",
+    )
+    async def browser_mouse_click(
+        session_id: str,
+        x: float,
+        y: float,
+        button: str = "left",
+        wait_seconds: float = DEFAULT_ACTION_WAIT_SECONDS,
+    ) -> dict[str, Any]:
+        return await manager.run_action(
+            session_id=session_id,
+            action_name="browser_mouse_click",
+            operation=lambda browser: mouse_click_at(
+                browser,
+                x=x,
+                y=y,
+                button=button,
+                wait_seconds=wait_seconds,
+            ),
+            action_args={
+                "x": x,
+                "y": y,
+                "button": button,
+                "wait_seconds": wait_seconds,
+            },
+        )
+
+    @mcp.tool(
+        name="browser_mouse_move",
+        description="Move the mouse cursor to viewport pixel position (x, y) via "
+        "intermediate mouseMoved CDP events. Useful for creating cursor movement "
+        "trails before a click or for hover interactions.",
+    )
+    async def browser_mouse_move(
+        session_id: str,
+        x: float,
+        y: float,
+        steps: int = 10,
+    ) -> dict[str, Any]:
+        return await manager.run_action(
+            session_id=session_id,
+            action_name="browser_mouse_move",
+            operation=lambda browser: mouse_move_to(
+                browser,
+                x=x,
+                y=y,
+                steps=steps,
+            ),
+            action_args={
+                "x": x,
+                "y": y,
+                "steps": steps,
+            },
+        )
+
+    @mcp.tool(
+        name="browser_press_hold",
+        description="Sustained mouse press at viewport pixel (x, y) for a given "
+        "duration. Dispatches mousePressed, emits tiny mouseMoved jitter while "
+        "holding, then mouseReleased. Use for press-and-hold verification "
+        "challenges or long-press interactions.",
+    )
+    async def browser_press_hold(
+        session_id: str,
+        x: float,
+        y: float,
+        duration_ms: float = 3000.0,
+        wait_seconds: float = DEFAULT_ACTION_WAIT_SECONDS,
+    ) -> dict[str, Any]:
+        return await manager.run_action(
+            session_id=session_id,
+            action_name="browser_press_hold",
+            operation=lambda browser: press_hold_at(
+                browser,
+                x=x,
+                y=y,
+                duration_ms=duration_ms,
+                wait_seconds=wait_seconds,
+            ),
+            action_args={
+                "x": x,
+                "y": y,
+                "duration_ms": duration_ms,
                 "wait_seconds": wait_seconds,
             },
         )

@@ -1260,6 +1260,90 @@ class MithwireBrowser:
             )
         )
 
+    async def mouse_click(
+        self,
+        x: float,
+        y: float,
+        button: str = "left",
+    ) -> None:
+        """Native CDP coordinate click at viewport pixel (x, y)."""
+        await self.tab.mouse_click(x, y, button=button)
+
+    async def mouse_move(
+        self,
+        x: float,
+        y: float,
+        steps: int = 10,
+    ) -> None:
+        """Move the cursor to (x, y) via intermediate ``mouseMoved`` events.
+
+        Uses raw CDP dispatch instead of ``tab.mouse_move`` which has a
+        spurious ``mouseReleased`` at the end.
+        """
+        import random
+
+        steps = max(1, steps)
+        for i in range(1, steps + 1):
+            frac = i / steps
+            ix = x * frac
+            iy = y * frac
+            await self.tab.send(
+                self._cdp_input.dispatch_mouse_event("mouseMoved", x=ix, y=iy)
+            )
+            await asyncio.sleep(random.uniform(0.004, 0.016))
+
+    async def press_hold(
+        self,
+        x: float,
+        y: float,
+        duration_seconds: float = 3.0,
+    ) -> None:
+        """Sustained mouse press at (x, y) with micro-jitter.
+
+        Dispatches ``mousePressed``, holds for *duration_seconds* while
+        emitting tiny ``mouseMoved`` jitter, then dispatches
+        ``mouseReleased``.  This is the primitive that passes Human
+        Security-class press-and-hold challenges.
+        """
+        import random
+
+        from mithwire.cdp.input_ import MouseButton
+
+        await self.tab.send(
+            self._cdp_input.dispatch_mouse_event(
+                "mousePressed",
+                x=x,
+                y=y,
+                button=MouseButton("left"),
+                buttons=1,
+                click_count=1,
+            )
+        )
+
+        elapsed = 0.0
+        while elapsed < duration_seconds:
+            jx = x + random.uniform(-0.6, 0.6)
+            jy = y + random.uniform(-0.6, 0.6)
+            await self.tab.send(
+                self._cdp_input.dispatch_mouse_event(
+                    "mouseMoved", x=jx, y=jy, buttons=1
+                )
+            )
+            delay = random.uniform(0.03, 0.08)
+            await asyncio.sleep(delay)
+            elapsed += delay
+
+        await self.tab.send(
+            self._cdp_input.dispatch_mouse_event(
+                "mouseReleased",
+                x=x,
+                y=y,
+                button=MouseButton("left"),
+                buttons=0,
+                click_count=1,
+            )
+        )
+
     async def set_cookies(
         self,
         cookies: list[dict[str, Any]],
