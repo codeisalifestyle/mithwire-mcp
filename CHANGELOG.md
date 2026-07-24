@@ -5,6 +5,13 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.4.2](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.1...v0.4.2) (2026-07-24)
+
+
+### Bug Fixes
+
+* add skip_probe and probe_timeout to session_start ([#28](https://github.com/codeisalifestyle/mithwire-mcp/issues/28)) ([937146c](https://github.com/codeisalifestyle/mithwire-mcp/commit/937146cbbf5cbb7520707a0f41cc0e43b98239ba))
+
 ## [0.4.1](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.0...v0.4.1) (2026-07-22)
 
 
