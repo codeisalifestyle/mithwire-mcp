@@ -1137,6 +1137,8 @@ class BrowserSessionManager:
         fingerprint: dict[str, Any] | None = None,
         webrtc_leak_protection: str | None = None,
         engine: str | None = None,
+        skip_probe: bool = False,
+        probe_timeout: float | None = None,
     ) -> dict[str, Any]:
         resolved_session_id = session_id or f"sess_{uuid.uuid4().hex[:12]}"
         launch_context = self._resolve_launch_context(
@@ -1194,10 +1196,17 @@ class BrowserSessionManager:
         # for the wrong country). The probe also returns the proxy's egress
         # geo/timezone, which we then feed straight into the default identity
         # without doing the same lookup again after launch.
+        #
+        # skip_probe=True skips the preflight entirely — identity derivation
+        # falls back to the in-browser lookup (same as the SOCKS path).
+        # probe_timeout overrides the default 8s deadline for slow proxies.
         proxy_egress_data: dict[str, Any] = {}
-        if proxy_config is not None:
+        if proxy_config is not None and not skip_probe:
+            probe_kwargs: dict[str, Any] = {}
+            if probe_timeout is not None:
+                probe_kwargs["timeout_seconds"] = float(probe_timeout)
             try:
-                proxy_egress_data = await probe_proxy(proxy_config)
+                proxy_egress_data = await probe_proxy(proxy_config, **probe_kwargs)
             except ProxyHealthError as exc:
                 logger.warning(
                     "Refusing to start session %s: proxy preflight failed (%s)",
@@ -1205,6 +1214,12 @@ class BrowserSessionManager:
                     exc,
                 )
                 raise
+        elif proxy_config is not None and skip_probe:
+            logger.info(
+                "Skipping proxy preflight for session %s (skip_probe=True). "
+                "Identity will be derived via in-browser lookup after launch.",
+                resolved_session_id,
+            )
 
         # IDENTITY DEFAULTS FROM PROXY EGRESS
         # When a proxy is set, default the browser identity (timezone, locale,

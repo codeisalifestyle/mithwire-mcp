@@ -330,6 +330,57 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("secret", str(meta_proxy))
 
+    async def test_skip_probe_launches_without_preflight(self) -> None:
+        """skip_probe=True must skip the preflight entirely. Identity falls
+        back to the in-browser alignment, same as the SOCKS path."""
+        observers, url = _patch_observers_and_url()
+        probe_mock = AsyncMock(
+            side_effect=AssertionError("probe must not run when skip_probe=True")
+        )
+        with _patch_browser(), observers, url, patch(
+            "mithwire_mcp.runtime.probe_proxy", new=probe_mock
+        ):
+            await self.manager.start_session(
+                session_id="sess_skip_probe",
+                headless=True,
+                start_url=None,
+                browser_args=None,
+                browser_executable_path=None,
+                sandbox=True,
+                cookie_file=None,
+                cookie_fallback_domain=None,
+                profile=None,
+                proxy="http://user:pw@1.2.3.4:8080",
+                skip_probe=True,
+            )
+        self.assertEqual(len(_StubBrowser.instances), 1)
+        # With skip_probe, identity derivation defers to align_timezone_to_proxy.
+        self.assertTrue(_StubBrowser.instances[0].align_called)
+
+    async def test_probe_timeout_is_forwarded(self) -> None:
+        """probe_timeout must be passed through to probe_proxy."""
+        observers, url = _patch_observers_and_url()
+        probe_mock = AsyncMock(return_value=_EGRESS_DE)
+        with _patch_browser(), observers, url, patch(
+            "mithwire_mcp.runtime.probe_proxy", new=probe_mock
+        ):
+            await self.manager.start_session(
+                session_id="sess_probe_timeout",
+                headless=True,
+                start_url=None,
+                browser_args=None,
+                browser_executable_path=None,
+                sandbox=True,
+                cookie_file=None,
+                cookie_fallback_domain=None,
+                profile=None,
+                proxy="http://user:pw@1.2.3.4:8080",
+                probe_timeout=20.0,
+            )
+        probe_mock.assert_awaited_once()
+        call_kwargs = probe_mock.call_args[1]
+        self.assertEqual(call_kwargs["timeout_seconds"], 20.0)
+
     async def test_socks_proxy_falls_back_to_in_browser_alignment(self) -> None:
         # SOCKS probe returns {} (TCP-only check); the manager must then ask
         # the browser to do the ipapi.is lookup through itself.

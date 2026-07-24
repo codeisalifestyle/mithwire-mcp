@@ -194,7 +194,16 @@ def create_server(
             "webrtc_leak_protection controls the WebRTC IP-leak guard: 'auto' "
             "(default; filters public ICE candidates when proxied so the real IP "
             "can't leak via STUN), 'filter' (always filter), 'disable' (remove "
-            "RTCPeerConnection), or 'off'."
+            "RTCPeerConnection), or 'off'. "
+            "skip_probe (default false): skip the pre-launch proxy health check "
+            "entirely. Useful when the proxy has already been verified externally "
+            "or when the proxy does not support the HTTPS CONNECT tunnel used by "
+            "the default probe. Identity defaults (timezone, locale) will be "
+            "derived via an in-browser lookup after launch. "
+            "probe_timeout (seconds): override the default 8-second proxy probe "
+            "timeout. Raise for slow residential/mobile proxies; the probe "
+            "includes an automatic plain-HTTP fallback for proxies that fail "
+            "the primary HTTPS/CONNECT path."
         ),
     )
     async def session_start(
@@ -212,6 +221,8 @@ def create_server(
         fingerprint: dict[str, Any] | None = None,
         webrtc_leak_protection: str | None = None,
         engine: str | None = None,
+        skip_probe: bool = False,
+        probe_timeout: float | None = None,
     ) -> dict[str, Any]:
         return await manager.start_session(
             session_id=session_id,
@@ -228,6 +239,8 @@ def create_server(
             fingerprint=fingerprint,
             webrtc_leak_protection=webrtc_leak_protection,
             engine=engine,
+            skip_probe=skip_probe,
+            probe_timeout=probe_timeout,
         )
 
     @mcp.tool(
