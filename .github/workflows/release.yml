@@ -38,7 +38,7 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   release-please:
@@ -151,10 +151,13 @@ jobs:
           skip-existing: true
 
   # 5. Docker: build and push to GHCR on stable releases or tag-replay
-  #    dispatches.  Skipped on TestPyPI dry runs (no tag to version the image).
+  #    dispatches.  Depends on `pypi` (not just `build`) so the engine
+  #    dependency is guaranteed to be on the index before `pip install`
+  #    runs inside the Dockerfile.  A short retry loop handles PyPI CDN
+  #    propagation delay (typically <60s).
   docker:
     name: Docker image (GHCR)
-    needs: [release-please, build]
+    needs: [release-please, build, pypi]
     if: |
       always() && needs.build.result == 'success' && (
         needs.release-please.outputs.release_created == 'true'
