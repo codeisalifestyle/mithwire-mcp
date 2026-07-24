@@ -260,6 +260,8 @@ async def sessions_create(request: Request) -> Response:
             proxy_ref=body.get("proxy_ref"),
             fingerprint=body.get("fingerprint"),
             webrtc_leak_protection=body.get("webrtc_leak_protection"),
+            skip_probe=bool(body.get("skip_probe", False)),
+            probe_timeout=body.get("probe_timeout"),
         )
     except (ValueError, TypeError) as exc:
         return _err(str(exc), status=400)
