@@ -15,12 +15,13 @@ RUN apt-get update \
        libxrandr2 \
        libasound2t64 \
        xdg-utils \
+       xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash mithwire
 
 COPY . /build
-RUN pip install --no-cache-dir /build \
+RUN pip install --no-cache-dir '/build[stealth]' \
     && rm -rf /build
 
 ENV CHROME=/usr/bin/chromium
