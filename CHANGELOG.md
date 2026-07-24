@@ -5,6 +5,13 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.4.3](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.2...v0.4.3) (2026-07-24)
+
+
+### Bug Fixes
+
+* Docker stealth support + release workflow race condition ([#30](https://github.com/codeisalifestyle/mithwire-mcp/issues/30)) ([203f151](https://github.com/codeisalifestyle/mithwire-mcp/commit/203f15108e1009c9bc8006a15a9e14cff00a070c))
+
 ## [0.4.2](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.1...v0.4.2) (2026-07-24)
 
 
