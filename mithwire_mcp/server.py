@@ -363,7 +363,6 @@ def create_server(
             "Regenerate and persist a new fingerprint for a profile using "
             "BrowserForge's Bayesian network. The new fingerprint replaces "
             "the profile's stored identity; subsequent launches will use it. "
-            "Requires browserforge (pip install mithwire-mcp[fingerprints]). "
             "Optional os ('windows', 'macos', 'linux') and browser (default "
             "'chrome') control the generated identity's platform family."
         ),

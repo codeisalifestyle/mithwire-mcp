@@ -27,6 +27,16 @@ from mithwire_mcp.proxy_health import (
 )
 
 _IPAPI_PAYLOAD = {
+    "query": "203.0.113.42",
+    "country": "Germany",
+    "countryCode": "DE",
+    "city": "Berlin",
+    "timezone": "Europe/Berlin",
+    "lat": 52.5200,
+    "lon": 13.4050,
+}
+
+_NORMALIZED_PAYLOAD = {
     "ip": "203.0.113.42",
     "location": {
         "country": "Germany",
@@ -146,7 +156,7 @@ class ProbeProxyHttpTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["ip"], "203.0.113.42")
         self.assertEqual(data["location"]["timezone"], "Europe/Berlin")
         # Sanity: we used the absolute-form HTTP request line the probe needs.
-        self.assertIn(b"GET http://api.ipapi.is/", fake.last_request)
+        self.assertIn(b"GET http://ip-api.com/json/", fake.last_request)
 
     async def test_credentials_are_forwarded(self) -> None:
         recorded: dict[str, bytes] = {}
@@ -338,7 +348,7 @@ class TriggerRotationTest(unittest.IsolatedAsyncioTestCase):
 class EgressSummaryTest(unittest.TestCase):
     def test_picks_human_readable_fields(self) -> None:
         self.assertEqual(
-            egress_summary(_IPAPI_PAYLOAD),
+            egress_summary(_NORMALIZED_PAYLOAD),
             {
                 "exit_ip": "203.0.113.42",
                 "timezone": "Europe/Berlin",

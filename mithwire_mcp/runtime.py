@@ -412,7 +412,7 @@ class BrowserSessionManager:
         if not fingerprint_gen.is_available():
             raise ValueError(
                 "BrowserForge is not installed. "
-                "Install with: pip install mithwire-mcp[fingerprints]"
+                "Ensure browserforge is installed: pip install browserforge"
             )
 
         fp = fingerprint_gen.generate(
