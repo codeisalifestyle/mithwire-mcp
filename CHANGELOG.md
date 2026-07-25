@@ -5,6 +5,17 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.4.4](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.3...v0.4.4) (2026-07-25)
+
+
+### Features
+
+* add dev docker-compose stack with noVNC and Xvfb ([3cd9991](https://github.com/codeisalifestyle/mithwire-mcp/commit/3cd99910dafba8b4c1a846e4cd870ddfbf7700c2))
+* add Windows test profiles for cross-OS UA spoofing ([#33](https://github.com/codeisalifestyle/mithwire-mcp/issues/33)) ([c0c4bfe](https://github.com/codeisalifestyle/mithwire-mcp/commit/c0c4bfe8a0c1c39d40c34aa85bf5bf3884d9a80b))
+* reflect browserforge default inclusion in mithwire-mcp ([48e2c45](https://github.com/codeisalifestyle/mithwire-mcp/commit/48e2c45b00e3a69278320366599f6a704ed72b85))
+* reflect browserforge default inclusion in mithwire-mcp ([36099ed](https://github.com/codeisalifestyle/mithwire-mcp/commit/36099ed7d1092e7ee792a52258d3514f5c789449))
+* reflect browserforge default inclusion in mithwire-mcp (ELE-72) ([95fe349](https://github.com/codeisalifestyle/mithwire-mcp/commit/95fe349aa789ccad39fc95ef4b8d24d17a1e4def))
+
 ## [0.4.3](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.2...v0.4.3) (2026-07-24)
 
 
