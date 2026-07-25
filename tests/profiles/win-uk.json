@@ -1,0 +1,22 @@
+{
+  "name": "win-uk-residential",
+  "timezone_id": "Europe/London",
+  "languages": ["en-GB", "en"],
+  "accept_language": "en-GB,en",
+  "platform": "Win32",
+  "screen_width": 1920,
+  "screen_height": 1080,
+  "device_scale_factor": 1.0,
+  "mobile": false,
+  "max_touch_points": 0,
+  "hardware_concurrency": 8,
+  "device_memory": 16,
+  "latitude": 51.5085,
+  "longitude": -0.1257,
+  "geo_accuracy": 50.0,
+  "webgl_vendor": "Google Inc. (NVIDIA)",
+  "webgl_renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "source": {
+    "notes": "cross-OS Windows/London identity on Linux host; common NVIDIA desktop; tests Win32 spoofing"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "win-us-east",
+  "timezone_id": "America/New_York",
+  "languages": ["en-US", "en"],
+  "accept_language": "en-US,en",
+  "platform": "Win32",
+  "screen_width": 2560,
+  "screen_height": 1440,
+  "device_scale_factor": 1.25,
+  "mobile": false,
+  "max_touch_points": 10,
+  "hardware_concurrency": 12,
+  "device_memory": 32,
+  "latitude": 40.7128,
+  "longitude": -74.0060,
+  "geo_accuracy": 50.0,
+  "webgl_vendor": "Google Inc. (AMD)",
+  "webgl_renderer": "ANGLE (AMD, AMD Radeon RX 7800 XT Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "source": {
+    "notes": "cross-OS Windows/NYC identity; AMD GPU; high-DPI touchscreen (Surface-like); max_touch_points=10 is common on Windows laptops"
+  }
+}
