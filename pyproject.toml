@@ -13,6 +13,7 @@ authors = [{ name = "codeisalifestyle" }]
 dependencies = [
   "mcp>=1.26.0,<2",
   "mithwire>=0.51.5,<0.60",
+  "browserforge>=1.2",
   "opencv-python>=4.8,<5",
 ]
 

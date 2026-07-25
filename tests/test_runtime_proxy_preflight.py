@@ -160,8 +160,8 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(_StubBrowser.instances), 1)
         fp = _StubBrowser.instances[0].fingerprint
         self.assertEqual(fp.timezone_id, "America/Los_Angeles")
-        # No proxy -> no proxy-derived defaults -> languages stay unset.
-        self.assertIsNone(fp.languages)
+        # With BrowserForge included by default, languages are generated automatically.
+        self.assertEqual(fp.languages, ["en-US"])
         self.assertFalse(_StubBrowser.instances[0].align_called)
 
     async def test_bad_proxy_refuses_session_before_browser_starts(self) -> None:
@@ -404,8 +404,8 @@ class ProxyPreflightTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(_StubBrowser.instances[0].align_called)
         fp = _StubBrowser.instances[0].fingerprint
-        # Without egress data we can't auto-derive identity; languages stay None.
-        self.assertIsNone(fp.languages)
+        # With BrowserForge included by default, languages are generated automatically.
+        self.assertEqual(fp.languages, ["en-US"])
 
 
 _EGRESS_US = {
