@@ -1,0 +1,22 @@
+{
+  "name": "win-de-berlin",
+  "timezone_id": "Europe/Berlin",
+  "languages": ["de-DE", "de", "en"],
+  "accept_language": "de-DE,de,en",
+  "platform": "Win32",
+  "screen_width": 1920,
+  "screen_height": 1080,
+  "device_scale_factor": 1.0,
+  "mobile": false,
+  "max_touch_points": 0,
+  "hardware_concurrency": 6,
+  "device_memory": 16,
+  "latitude": 52.5200,
+  "longitude": 13.4050,
+  "geo_accuracy": 50.0,
+  "webgl_vendor": "Google Inc. (Intel)",
+  "webgl_renderer": "ANGLE (Intel, Intel(R) UHD Graphics 770 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "source": {
+    "notes": "cross-OS Windows/Berlin identity; Intel integrated GPU; standard office desktop"
+  }
+}
