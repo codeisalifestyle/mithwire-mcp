@@ -1,0 +1,42 @@
+# Local dev container for mithwire-mcp with visual observation.
+#
+# Runs the mithwire-mcp image with Xvfb + noVNC so you can watch the
+# browser visually while developing. MCP is exposed on TCP for Cursor
+# or any MCP client to connect.
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d --build
+#
+# Endpoints:
+#   mithwire-mcp:  localhost:7867  (streamable-http, for MCP client config)
+#   noVNC viewer:  http://localhost:6080/vnc.html  (browser-based VNC)
+
+name: mithwire-mcp-dev
+
+services:
+  mithwire:
+    container_name: mithwire-mcp-dev
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/usr/local/bin/entrypoint-dev.sh"]
+    user: root
+    deploy:
+      resources:
+        limits:
+          memory: 3072M
+    environment:
+      - DISPLAY=:99
+      - DISPLAY_NUM=99
+      - SCREEN_RES=1920x1080x24
+      - MCP_PORT=7867
+      - NOVNC_PORT=6080
+    ports:
+      - "7867:7867"   # mithwire-mcp streamable-http
+      - "6080:6080"   # noVNC web UI
+    volumes:
+      - mithwire_state:/data
+
+volumes:
+  mithwire_state: null

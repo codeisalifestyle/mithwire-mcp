@@ -16,6 +16,9 @@ RUN apt-get update \
        libasound2t64 \
        xdg-utils \
        xvfb \
+       x11vnc \
+       novnc \
+       websockify \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash mithwire
@@ -27,13 +30,16 @@ RUN pip install --no-cache-dir '/build[stealth]' \
 ENV CHROME=/usr/bin/chromium
 ENV PYTHONUNBUFFERED=1
 
+COPY entrypoint-dev.sh /usr/local/bin/entrypoint-dev.sh
+RUN chmod +x /usr/local/bin/entrypoint-dev.sh
+
 RUN mkdir -p /data /downloads \
     && chown mithwire:mithwire /data /downloads
 
 USER mithwire
 WORKDIR /home/mithwire
 
-EXPOSE 8000
+EXPOSE 8000 7867 6080
 
 ENTRYPOINT ["mithwire-mcp"]
 CMD ["--transport", "stdio"]
