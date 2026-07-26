@@ -300,6 +300,25 @@ All publishing (TestPyPI, PyPI, Docker GHCR) is fully automated — no
 manual approval gates. The `testpypi` and `pypi` GitHub environments
 have no required reviewers.
 
+**Cutting a release from the CLI (the normal path):**
+
+```bash
+# Find the release-please PR:
+gh pr list --label 'autorelease: pending'
+
+# If CI shows "action_required" (GitHub blocks bot-PR workflows on
+# public repos), approve it first:
+RUN_ID=$(gh run list --branch release-please--branches--main--components--mithwire-mcp \
+  --workflow CI --json databaseId,conclusion --jq '.[] | select(.conclusion=="action_required") | .databaseId' | head -1)
+[ -n "$RUN_ID" ] && gh api "repos/{owner}/{repo}/actions/runs/$RUN_ID/approve" -X POST
+
+# Wait for CI, then merge:
+gh pr merge <number> --merge
+```
+
+The merge triggers the full pipeline: tag → build → TestPyPI → PyPI →
+Docker (mithwire-mcp only). No further interaction needed.
+
 Dry-run the publish chain without cutting a release — Actions tab → the
 `release` workflow → **Run workflow**. That builds a throwaway
 `<version>.devNNNN` and pushes only to TestPyPI, exercising
@@ -437,7 +456,7 @@ reload again.
 
 ## mithwire docs (re-check periodically)
 
-The runtime is `mithwire` (editable, currently 0.48.x). Consult upstream docs when
+The runtime is `mithwire` (editable). Consult upstream docs when
 touching launch, proxy, or CDP code — behavior changes between releases:
 
 - Index: https://ultrafunkamsterdam.github.io/nodriver/index.html
