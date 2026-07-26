@@ -132,36 +132,86 @@ docker compose -f docker-compose.dev.yml up -d --build
 ## 🧰 Available MCP Tools Reference
 
 <details>
-<summary><b>🔁 Session Lifecycle & Profile Management</b></summary>
+<summary><b>🔁 Session Lifecycle</b></summary>
 
 - `session_start` - Launch a new browser session (ephemeral or persistent profile)
 - `session_list` - List active browser sessions
 - `session_get` - Get session status and identity metadata
+- `session_set_fingerprint` - Override the active session fingerprint
+- `session_rotate_proxy` - Rotate the proxy exit IP and optionally re-align identity
+- `session_state_paths` - Show state directory layout (profiles, proxies, cookies)
+- `session_set_policy` / `session_get_policy` - Set or read per-session security policy
+- `session_set_download_dir` - Change the session download directory
+- `session_warmup` - Warm up a session for more natural browsing patterns
 - `session_stop` - Close a specific session
 - `session_stop_all` - Terminate all running sessions
-- `session_profile_list` / `session_profile_set` / `session_profile_delete` - Profile management
-- `session_proxy_list` / `session_proxy_set` / `session_rotate_proxy` - Proxy registry & rotation
+</details>
+
+<details>
+<summary><b>👤 Profile & Proxy Management</b></summary>
+
+- `session_profile_list` / `session_profile_get` / `session_profile_set` / `session_profile_delete` - CRUD for persistent profiles
+- `session_profile_regenerate_fingerprint` - Regenerate a profile's fingerprint via BrowserForge
+- `session_proxy_list` / `session_proxy_get` / `session_proxy_set` / `session_proxy_delete` - Proxy registry CRUD
 </details>
 
 <details>
 <summary><b>🎮 Browser Navigation & DOM Actions</b></summary>
 
+- `browser_url` - Get the current page URL
 - `browser_navigate` / `browser_back` / `browser_forward` / `browser_reload` - Navigation
 - `browser_snapshot` - Take interactive DOM snapshot with element references
 - `browser_query` - Find elements by CSS selector or text
-- `browser_click` / `browser_mouse_click` / `browser_type` - User interactions
-- `browser_scroll` / `browser_wait_for_selector` / `browser_wait_for_text` - Waits and positioning
+- `browser_click` / `browser_mouse_click` / `browser_mouse_move` / `browser_press_hold` / `browser_type` - User interactions
+- `browser_scroll` - Scroll the page or an element
+- `browser_handle_dialog` - Accept or dismiss browser dialogs
+- `browser_set_file_input` - Set files on a file input element
 - `browser_take_screenshot` - Capture page screenshot
 - `browser_solve_cloudflare` - Automatically solve Cloudflare Turnstile challenge
 </details>
 
 <details>
-<summary><b>📡 Cookies, Storage & Network Capture</b></summary>
+<summary><b>🗂️ Tabs</b></summary>
+
+- `browser_tab_list` / `browser_tab_current` - List open tabs or get the active tab
+- `browser_tab_new` / `browser_tab_switch` / `browser_tab_close` - Create, switch, or close tabs
+</details>
+
+<details>
+<summary><b>⏳ Waits</b></summary>
+
+- `browser_wait` - Wait for a fixed duration
+- `browser_wait_for_selector` - Wait until a CSS selector appears
+- `browser_wait_for_text` - Wait until text appears on the page
+- `browser_wait_for_url` - Wait until the URL matches a pattern
+- `browser_wait_for_function` - Wait until a JS expression returns truthy
+- `browser_wait_for_network_idle` - Wait until network activity settles
+</details>
+
+<details>
+<summary><b>📡 Cookies, Storage & Network</b></summary>
 
 - `browser_cookies_get` / `browser_cookies_set` / `browser_cookies_save` / `browser_cookies_clear`
 - `browser_storage_get` / `browser_storage_set` / `browser_storage_clear`
-- `browser_console_messages` / `browser_network_requests`
-- `browser_network_capture_start` / `browser_network_capture_get` / `browser_network_capture_stop`
+- `browser_console_messages` - Read captured console log messages
+- `browser_network_requests` - List captured network requests
+- `browser_network_capture_start` / `browser_network_capture_get` / `browser_network_capture_stop` / `browser_network_capture_status`
+- `browser_downloads` - List downloaded files
+</details>
+
+<details>
+<summary><b>🔧 Advanced: HTML, JS Evaluation & Tracing</b></summary>
+
+- `browser_html` - Get the raw HTML of the current page or an element
+- `browser_evaluate` - Execute arbitrary JavaScript in the page context
+- `session_trace_start` / `session_trace_stop` / `session_trace_get` - Record and inspect CDP traces
+- `session_trace_export` / `session_trace_replay` - Export or replay recorded traces
+</details>
+
+<details>
+<summary><b>📊 Dashboard</b></summary>
+
+- `dashboard_start` / `dashboard_stop` / `dashboard_status` - Start, stop, or check the live session dashboard
 </details>
 
 ---
