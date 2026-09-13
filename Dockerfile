@@ -6,6 +6,7 @@ RUN apt-get update \
        chromium-sandbox \
        fonts-liberation \
        fonts-noto-color-emoji \
+       fonts-urw-base35 \
        libgbm1 \
        libnss3 \
        libatk-bridge2.0-0 \
