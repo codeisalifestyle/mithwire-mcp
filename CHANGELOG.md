@@ -5,6 +5,17 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.5.0](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.5...v0.5.0) (2026-09-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* dashboard_* tools and HTTP/WebSocket sidecar are removed
+
+### Refactors
+
+* remove dashboard sidecar and orchestration features ([a584c1a](https://github.com/codeisalifestyle/mithwire-mcp/commit/a584c1a9ba4c22f85c05efd1a58491793295ee04))
+
 ## [0.4.5](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.4...v0.4.5) (2026-09-13)
 
 
