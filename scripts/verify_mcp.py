@@ -202,17 +202,99 @@ async def check_turnstile(browser: MithwireBrowser, timeout: float) -> list[Chec
     ]
 
 
+from mithwire.stealth_diagnostic.probes import SANNYSOFT_PROBE, parse, wrap  # noqa: E402
+
+from scripts.detection_probes import (  # noqa: E402
+    BROWSERSCAN_PROBE,
+    INCOLOMITAS_PROBE,
+    REBROWSER_PROBE,
+)
+
+
+async def check_sannysoft(browser: MithwireBrowser, timeout: float) -> list[Check]:
+    await browser.goto("https://bot.sannysoft.com/", wait_seconds=2.0)
+    raw = await browser.tab.evaluate(wrap(SANNYSOFT_PROBE), await_promise=True)
+    results = parse(raw) if raw else {}
+
+    total = results.get("total", 0)
+    failed = results.get("failed", [])
+    passed = results.get("passed", 0)
+    warn = results.get("warn", [])
+
+    if total > 0:
+        details = f"{passed}/{total} passed"
+        if failed:
+            details += f" (failed: {', '.join(failed)})"
+        if warn:
+            details += f" (warn: {', '.join(warn)})"
+        return [
+            Check("sannysoft 0 failed", len(failed) == 0, details),
+        ]
+    return [Check("sannysoft:captured", False, "no results from sannysoft")]
+
+
+async def check_rebrowser(browser: MithwireBrowser, timeout: float) -> list[Check]:
+    await browser.goto("https://bot-detector.rebrowser.net/", wait_seconds=3.0)
+    raw = await browser.tab.evaluate(wrap(REBROWSER_PROBE), await_promise=True)
+    results = parse(raw) if raw else {}
+    if isinstance(results, dict) and results.get("ready"):
+        failing = results.get("failing", [])
+        passed = results.get("passed", 0)
+        total = results.get("total", 0)
+        return [
+            Check("rebrowser 0 failing", len(failing) == 0, f"{passed}/{total} clean (fails: {', '.join(failing)})"),
+        ]
+    return [Check("rebrowser:captured", False, f"ready={results.get('ready')} error={results.get('error')}", critical=False)]
+
+
+async def check_browserscan(browser: MithwireBrowser, timeout: float) -> list[Check]:
+    await browser.goto("https://www.browserscan.net/bot-detection", wait_seconds=3.0)
+    raw = await browser.tab.evaluate(wrap(BROWSERSCAN_PROBE), await_promise=True)
+    results = parse(raw) if raw else {}
+    if isinstance(results, dict) and results.get("ready"):
+        overall = str(results.get("overall", ""))
+        failed = results.get("testsFailed", [])
+        normal = results.get("testsNormal", 0)
+        total = results.get("testsTotal", 0)
+        is_normal = overall.lower() == "normal" and len(failed) == 0
+        return [
+            Check("browserscan verdict Normal", is_normal, f"overall={overall}, {normal}/{total} normal (failed: {', '.join(failed)})"),
+        ]
+    return [Check("browserscan:captured", False, f"ready={results.get('ready')} error={results.get('error')}", critical=False)]
+
+
+async def check_incolumitas(browser: MithwireBrowser, timeout: float) -> list[Check]:
+    await browser.goto("https://bot.incolumitas.com/", wait_seconds=3.0)
+    raw = await browser.tab.evaluate(wrap(INCOLOMITAS_PROBE), await_promise=True)
+    results = parse(raw) if raw else {}
+    if isinstance(results, dict) and results.get("ready"):
+        new_fails = results.get("newFails", [])
+        unexpected = [f for f in new_fails if f not in ("WEBDRIVER", "connectionRTT")]
+        return [
+            Check(
+                "incolumitas bot checks",
+                len(unexpected) == 0,
+                f"newFails={len(new_fails)} (unexpected: {', '.join(unexpected)})",
+            ),
+        ]
+    return [Check("incolumitas:captured", False, f"ready={results.get('ready')} error={results.get('error')}", critical=False)]
+
+
 SITES = {
     "deviceinfo": check_deviceinfo,
     "fingerprint": check_fingerprint,
     "turnstile": check_turnstile,
+    "sannysoft": check_sannysoft,
+    "rebrowser": check_rebrowser,
+    "browserscan": check_browserscan,
+    "incolumitas": check_incolumitas,
 }
 
 
 async def run(args) -> int:
     proxy_config = parse_proxy(args.proxy) if args.proxy else None
-    browser = MithwireBrowser(headless=args.headless, proxy=proxy_config)
-    print(f"launching (headless={args.headless}, proxy={'yes' if proxy_config else 'no'})")
+    browser = MithwireBrowser(headless=args.headless, proxy=proxy_config, engine=args.engine)
+    print(f"launching (engine={args.engine or 'cdp'}, headless={args.headless}, proxy={'yes' if proxy_config else 'no'})")
     await browser.start()
     try:
         if proxy_config is not None:
@@ -223,12 +305,11 @@ async def run(args) -> int:
         all_checks: dict[str, list[Check]] = {}
         for key in site_keys:
             print(f"\n=== {key} ===")
+            fn = SITES[key]
             if key == "fingerprint":
-                checks = await check_fingerprint(browser, args.timeout, proxy_config is not None)
-            elif key == "turnstile":
-                checks = await check_turnstile(browser, args.timeout)
+                checks = await fn(browser, args.timeout, proxy_config is not None)
             else:
-                checks = await check_deviceinfo(browser, args.timeout)
+                checks = await fn(browser, args.timeout)
             all_checks[key] = checks
             for c in checks:
                 tier = "CRIT" if c.critical else "info"
@@ -245,8 +326,13 @@ async def run(args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Stealth verification harness")
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--engine", default=None, choices=["cdp", "stealth"], help="browser engine mode: 'cdp' or 'stealth'")
     parser.add_argument("--proxy", default=None, help="proxy spec (see session_start)")
-    parser.add_argument("--site", default="all", choices=["all", "deviceinfo", "fingerprint", "turnstile"])
+    parser.add_argument(
+        "--site",
+        default="all",
+        choices=["all", "deviceinfo", "fingerprint", "turnstile", "sannysoft", "rebrowser", "browserscan", "incolumitas"],
+    )
     parser.add_argument("--timeout", type=int, default=30, help="per-site capture timeout (s)")
     args = parser.parse_args()
     try:

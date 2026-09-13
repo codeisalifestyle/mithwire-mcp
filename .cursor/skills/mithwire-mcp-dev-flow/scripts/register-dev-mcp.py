@@ -53,10 +53,6 @@ Examples:
     # Pin the dev MCP against a local engine checkout (instead of the
     # PyPI engine the venv installed):
     register-dev-mcp.py --branch --engine-source ~/Projects/mithwire
-
-    # Pre-bind the dashboard (optional; the dashboard_start tool also
-    # starts it on demand):
-    register-dev-mcp.py --branch --dashboard-port 8765
 """
 
 from __future__ import annotations
@@ -173,15 +169,12 @@ def _build_entry(
     engine_source: Path | None,
     state_root: Path | None,
     transport: str,
-    dashboard_port: int | None,
     extra_args: list[str],
     nonce: str,
 ) -> dict[str, object]:
     args: list[str] = ["--transport", transport]
     if state_root is not None:
         args.extend(["--state-root", str(state_root)])
-    if dashboard_port is not None:
-        args.extend(["--dashboard-port", str(dashboard_port)])
     args.extend(extra_args)
 
     # Order matters: engine first (if pinned) so the worktree-local engine
@@ -268,13 +261,6 @@ def main() -> int:
         help="Path to a local mithwire engine checkout. When set, the "
         "engine repo root is prepended to PYTHONPATH so the dev MCP runs against "
         "that engine instead of the PyPI version installed in the venv.",
-    )
-    parser.add_argument(
-        "--dashboard-port",
-        type=int,
-        default=None,
-        help="Optional dashboard port baked into the entry. "
-        "Without this, use the dashboard_start MCP tool to start it on demand.",
     )
     parser.add_argument(
         "--extra-arg",
@@ -367,7 +353,6 @@ def main() -> int:
         engine_source=engine_source,
         state_root=state_root,
         transport=args.transport,
-        dashboard_port=args.dashboard_port,
         extra_args=args.extra_arg,
         nonce=now_nonce(),
     )
@@ -381,10 +366,6 @@ def main() -> int:
     print(f"        binary:     {binary}")
     print(f"        engine src: {engine_source or '(use venv-installed PyPI engine)'}")
     print(f"        state root: {state_root or '(shared default)'}")
-    if args.dashboard_port is not None:
-        print(f"        dashboard:  http://127.0.0.1:{args.dashboard_port}/ (auto-start)")
-    else:
-        print("        dashboard:  off (use the dashboard_start MCP tool)")
     print()
     print("Cursor will respawn the entry on the next mcp.json read.")
     return 0

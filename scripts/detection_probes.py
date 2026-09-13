@@ -197,6 +197,63 @@ OVP_PROBE = _probe(r"""
   };
 """)
 
+REBROWSER_PROBE = _probe(r"""
+  const ready = () => {
+    const el = document.getElementById('detections-json');
+    if (!el || !el.value) return false;
+    try {
+      const tests = JSON.parse(el.value);
+      return Array.isArray(tests) && tests.length > 0;
+    } catch (e) { return false; }
+  };
+  const deadline = Date.now() + 25000;
+  while (Date.now() < deadline && !ready()) { await sleep(400); }
+  const el = document.getElementById('detections-json');
+  if (!el || !el.value) return { ready: false, error: 'no-detections-json' };
+  try {
+    const tests = JSON.parse(el.value);
+    const failing = tests.filter((t) => t.rating === 1).map((t) => t.type);
+    const passed = tests.filter((t) => t.rating === -1).length;
+    const notTriggered = tests.filter((t) => t.rating === 0).length;
+    return {
+      ready: true,
+      failing,
+      totalFails: failing.length,
+      passed,
+      notTriggered,
+      total: tests.length,
+      botDetected: failing.length > 0,
+    };
+  } catch (e) {
+    return { ready: false, error: String(e) };
+  }
+""")
+
+FINGERPRINTSCAN_PROBE = _probe(r"""
+  const ready = () => {
+    const s = document.getElementById('fingerprintScore');
+    return s && s.textContent && s.textContent.trim().length > 0 && !/loading/i.test(s.textContent);
+  };
+  const deadline = Date.now() + 25000;
+  while (Date.now() < deadline && !ready()) { await sleep(400); }
+  const scoreEl = document.getElementById('fingerprintScore');
+  const score = scoreEl ? scoreEl.textContent.trim() : null;
+  const bodyText = document.body.innerText || '';
+  const botTests = {};
+  for (const key of ['WebDriver', 'Is Selenium Chrome', 'CDP Check', 'Is Playwright']) {
+    const match = bodyText.match(new RegExp(key + '\\s+(true|false)'));
+    if (match) botTests[key] = match[1] === 'true';
+  }
+  const fails = Object.entries(botTests).filter(([k, v]) => v === true).map(([k]) => k);
+  return {
+    ready: !!score,
+    score,
+    botTests,
+    fails,
+    botDetected: fails.length > 0,
+  };
+""")
+
 # (key, url, nav_wait_s, probe_js, probe_timeout_s)
 DETECTION_SITES: list[tuple[str, str, float, str, float]] = [
     (
@@ -219,6 +276,20 @@ DETECTION_SITES: list[tuple[str, str, float, str, float]] = [
         2.0,
         PIXELSCAN_PROBE,
         38.0,
+    ),
+    (
+        "rebrowser",
+        "https://bot-detector.rebrowser.net/",
+        2.0,
+        REBROWSER_PROBE,
+        35.0,
+    ),
+    (
+        "fingerprintscan",
+        "https://fingerprint-scan.com/",
+        3.0,
+        FINGERPRINTSCAN_PROBE,
+        35.0,
     ),
 ]
 
