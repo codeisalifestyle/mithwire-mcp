@@ -38,6 +38,10 @@ class ServerParserTest(unittest.TestCase):
         self.assertEqual(args.log_level, "DEBUG")
         self.assertEqual(args.state_root, "/tmp/browser-state")
 
+    def test_dashboard_args_removed(self) -> None:
+        with self.assertRaises(SystemExit):
+            self.parser.parse_args(["--dashboard-port", "8765"])
+
 
 class ServerToolsRegistrationTest(unittest.TestCase):
     def test_simplified_surface_drops_attach_modes_preflight_cookiejar(self) -> None:
@@ -51,6 +55,9 @@ class ServerToolsRegistrationTest(unittest.TestCase):
                 "session_launch_modes",
                 "session_preflight",
                 "session_cookie_jar_list",
+                "dashboard_start",
+                "dashboard_stop",
+                "dashboard_status",
             ):
                 self.assertNotIn(gone, tool_names)
 

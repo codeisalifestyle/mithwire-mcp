@@ -208,12 +208,6 @@ docker compose -f docker-compose.dev.yml up -d --build
 - `session_trace_export` / `session_trace_replay` - Export or replay recorded traces
 </details>
 
-<details>
-<summary><b>📊 Dashboard</b></summary>
-
-- `dashboard_start` / `dashboard_stop` / `dashboard_status` - Start, stop, or check the live session dashboard
-</details>
-
 ---
 
 ## 📜 License

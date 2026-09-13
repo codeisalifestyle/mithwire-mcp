@@ -154,8 +154,6 @@ class MithwireBrowser:
         }
         if self.user_data_dir:
             config_kwargs["user_data_dir"] = self.user_data_dir
-        if self.browser_executable_path:
-            config_kwargs["browser_executable_path"] = self.browser_executable_path
 
         merged_args: list[str] = list(self.browser_args)
         # Resolve the value Chromium gets for ``--proxy-server``. For an
@@ -182,6 +180,20 @@ class MithwireBrowser:
                 merged_args.append(self._proxy_relay.proxy_server_arg())
             else:
                 merged_args.append(self.proxy.proxy_server_arg())
+
+        if self.engine == "stealth" and not self.browser_executable_path:
+            from .cloakbrowser_adapter import build_launch_config
+
+            cb_binary, cb_flags = build_launch_config(
+                self._fingerprint,
+                proxy=self.proxy,
+                headless=self.headless,
+                extra_args=merged_args,
+            )
+            config_kwargs["browser_executable_path"] = cb_binary
+            merged_args = cb_flags
+        elif self.browser_executable_path:
+            config_kwargs["browser_executable_path"] = self.browser_executable_path
         if merged_args:
             config_kwargs["browser_args"] = merged_args
 

@@ -1,0 +1,23 @@
+# Docker Compose for MithWire stealth tests in Linux container
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml run --rm test
+#   docker compose -f docker-compose.test.yml run --rm test scripts/verify_mcp.py --headless --engine stealth --site sannysoft
+#   docker compose -f docker-compose.test.yml run --rm test scripts/profile_matrix.py --driver bridge --headless --engine stealth --profiles-filter 'win-us*' --skip-fpcom --skip-browserleaks --skip-captcha --skip-detection --skip-ipquality
+
+name: mithwire-mcp-test
+
+services:
+  test:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+    security_opt:
+      - seccomp=unconfined
+    volumes:
+      - .:/app
+      - ~/.cloakbrowser:/home/mithwire/.cloakbrowser
+    working_dir: /app
+    entrypoint: ["python"]
+    command: ["scripts/verify_mcp.py", "--headless", "--engine", "stealth", "--site", "all"]
