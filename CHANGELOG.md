@@ -5,6 +5,13 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.4.5](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.4...v0.4.5) (2026-09-13)
+
+
+### Bug Fixes
+
+* **deps:** bump mithwire dependency to &gt;=0.51.8 ([#38](https://github.com/codeisalifestyle/mithwire-mcp/issues/38)) ([80fbd8a](https://github.com/codeisalifestyle/mithwire-mcp/commit/80fbd8a1311180b914324ca4182322e58682e6b9))
+
 ## [0.4.4](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.3...v0.4.4) (2026-07-25)
 
 
