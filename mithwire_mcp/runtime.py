@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from . import actions as action_ops
+from ._lifecycle import drain, finish_even_if_cancelled
 from .actions import ensure_observers, get_url_and_title
 from .browser import MithwireBrowser
 from .cookies import load_cookie_file, resolve_cookie_path
@@ -1303,8 +1304,8 @@ class BrowserSessionManager:
             webrtc_leak_protection=launch_values.get("webrtc_leak_protection") or "auto",
             engine=resolved_engine,
         )
-        await browser.start()
         try:
+            await browser.start()
             # If the pre-launch probe gave us egress data, apply_fingerprint
             # has already pinned the browser timezone (and language, geo, …) to
             # match — no second lookup needed. For SOCKS we couldn't probe the
@@ -1412,8 +1413,14 @@ class BrowserSessionManager:
             await self._insert_session(session)
             logger.info("Started launch session %s", resolved_session_id)
             return session.summary()
-        except Exception:
-            await browser.close()
+        except BaseException:
+            # Failure *and* cancellation. A client giving up on a slow launch
+            # cancels this very task, so the browser would otherwise be left
+            # running with nothing able to find (let alone stop) it -- the
+            # "empty Chrome window, no activity" that piles up on a machine.
+            await finish_even_if_cancelled(
+                browser.close(), what=f"closing browser of session {resolved_session_id}"
+            )
             raise
 
     async def set_fingerprint(
@@ -1581,11 +1588,7 @@ class BrowserSessionManager:
                 "stopped": False,
                 "reason": "not_found",
             }
-        close_error: str | None = None
-        try:
-            await session.browser.close()
-        except Exception as exc:  # noqa: BLE001
-            close_error = str(exc)
+        close_error = await self._close_browser(session)
         result: dict[str, Any] = {
             "session_id": session_id,
             "stopped": True,
@@ -1595,18 +1598,47 @@ class BrowserSessionManager:
             result["close_error"] = close_error
         return result
 
+    async def _close_browser(self, session: BrowserSession) -> str | None:
+        """Close a session's browser; returns the error text if that failed.
+
+        The session has already been removed from the registry, so nothing could
+        retry a close that gets interrupted. It therefore runs in a task of its
+        own: a client cancelling the request (or the server shutting down) stops
+        the waiting, not the closing.
+        """
+        errors: list[str] = []
+
+        async def close() -> None:
+            try:
+                await session.browser.close()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(str(exc))
+
+        await finish_even_if_cancelled(
+            close(), what=f"closing browser of session {session.session_id}"
+        )
+        return errors[0] if errors else None
+
     async def stop_all_sessions(self) -> dict[str, Any]:
         async with self._sessions_lock:
             sessions = list(self._sessions.values())
             self._sessions.clear()
+        # Concurrently: one slow or wedged browser must not hold up (or, at
+        # shutdown, starve) the teardown of all the others.
+        outcomes = await asyncio.gather(
+            *(self._close_browser(session) for session in sessions),
+            return_exceptions=True,
+        )
         stopped_ids: list[str] = []
         errors: list[dict[str, str]] = []
-        for session in sessions:
-            try:
-                await session.browser.close()
-            except Exception as exc:  # noqa: BLE001
-                errors.append({"session_id": session.session_id, "error": str(exc)})
+        for session, outcome in zip(sessions, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                outcome = str(outcome) or type(outcome).__name__
+            if outcome:
+                errors.append({"session_id": session.session_id, "error": outcome})
             stopped_ids.append(session.session_id)
+        # Launches aborted a moment ago may still be tidying up in the background.
+        await drain(timeout=10.0)
         result: dict[str, Any] = {
             "stopped_count": len(stopped_ids),
             "session_ids": stopped_ids,

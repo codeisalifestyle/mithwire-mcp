@@ -38,13 +38,14 @@ jobs:
 
   # -----------------------------------------------------------------------
   # 2. Stealth e2e -- spawn a real Chrome via MithwireBrowser and verify
-  #    that every FingerprintConfig field reaches the browser.
+  #    that every FingerprintConfig field reaches the browser, and that no
+  #    Chrome outlives its session or its server (process-lifecycle smoke).
   # -----------------------------------------------------------------------
   e2e-application:
     name: Stealth e2e (real Chrome)
     runs-on: ubuntu-latest
     needs: unit-fast
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -63,7 +64,7 @@ jobs:
       - name: Run stealth e2e tests
         env:
           CHROME: ${{ steps.setup-chrome.outputs.chrome-path }}
-        run: uv run pytest tests/test_fingerprint_application.py -v --maxfail=1
+        run: uv run pytest tests/test_fingerprint_application.py tests/test_process_lifecycle_e2e.py -v --maxfail=1
 
   # -----------------------------------------------------------------------
   # 3. Anti-detect matrix -- the product-level gate.  Uses the stealth
