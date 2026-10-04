@@ -210,6 +210,19 @@ docker compose -f docker-compose.dev.yml up -d --build
 
 ---
 
+## 🧹 No Orphaned Chrome
+
+Every session owns the Chrome process it launched, and the server makes sure none outlives it:
+
+- A `session_start` that fails, times out or is cancelled by the client tears down its half-started browser (no more empty windows left behind).
+- `session_stop`, `session_stop_all` and server shutdown close browsers concurrently and delete their temporary profiles.
+- On `SIGTERM`/`SIGHUP`/`SIGINT` the server stops every browser immediately and exits instead of hanging.
+- If the server itself is killed outright (`SIGKILL`, OOM, a crash), a tiny watchdog process from the engine terminates exactly its browsers and removes their temporary profiles. Set `MITHWIRE_NO_EXIT_GUARD=1` to disable it.
+
+`scripts/smoke_process_lifecycle.py` checks all of this against a real stdio server and a real Chrome (it also runs in CI).
+
+---
+
 ## 📜 License
 
 Distributed under the **MIT License**. Powered by [**mithwire**](https://github.com/codeisalifestyle/mithwire) (AGPL-3.0).
