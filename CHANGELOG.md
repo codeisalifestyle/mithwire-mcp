@@ -5,6 +5,15 @@ maintained automatically by [release-please](https://github.com/googleapis/relea
 entries below are generated from [Conventional Commit](https://www.conventionalcommits.org/)
 messages. Do not edit released sections by hand.
 
+## [0.5.1](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.5.0...v0.5.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **deps:** require mithwire&gt;=0.51.9 (launch-abort cleanup, exit guard, profile removal) ([4293ade](https://github.com/codeisalifestyle/mithwire-mcp/commit/4293adec6bc612989fe00650be1c056c72636d30))
+* never leave a Chrome behind when a session launch is cancelled, fails, or the server is signalled ([429e82b](https://github.com/codeisalifestyle/mithwire-mcp/commit/429e82b2852784cbfc30312bb531dd6c0b139ab9))
+* never leave a Chrome behind when a session launch is cancelled, fails, or the server is signalled ([9c8a9e5](https://github.com/codeisalifestyle/mithwire-mcp/commit/9c8a9e50f5f3a555b1d3b301cb57dd9606101c11))
+
 ## [0.5.0](https://github.com/codeisalifestyle/mithwire-mcp/compare/v0.4.5...v0.5.0) (2026-09-13)
 
 
