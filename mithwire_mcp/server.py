@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 
+from ._lifecycle import exit_when_browsers_gone, terminate_browser_processes
 from .actions import (
     DEFAULT_ACTION_LIMIT,
     DEFAULT_ACTION_WAIT_SECONDS,
@@ -1510,20 +1511,42 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _install_signal_handlers() -> None:
-    """Translate termination signals into KeyboardInterrupt so the FastMCP
-    lifespan teardown (which closes browsers and removes profile clones) runs
-    under process managers/containers that send SIGTERM."""
+# After a termination signal: how long the browsers get to shut down cleanly
+# before the server kills the stragglers and exits regardless.
+SHUTDOWN_GRACE_SECONDS = 8.0
 
-    def _raise_keyboard_interrupt(_signum: int, _frame: Any) -> None:
+
+def _install_signal_handlers() -> None:
+    """Make termination signals reliably end the server *and* every browser.
+
+    SIGTERM/SIGHUP/SIGINT become KeyboardInterrupt so the FastMCP lifespan
+    teardown (which closes the browsers) runs under process managers and
+    containers. On its own that is not enough: the SDK reads stdin on a worker
+    thread that cannot be interrupted while it waits for the next line, so
+    unwinding the event loop can block forever -- the teardown never ran, the
+    process never exited, and every browser outlived it.
+
+    The handler therefore first stops every browser right away (synchronously,
+    no event loop needed) and arms a watchdog that ends the process once they
+    are gone, or after a grace period regardless.
+    """
+    shutting_down = False
+
+    def _on_signal(signum: int, _frame: Any) -> None:
+        nonlocal shutting_down
+        if shutting_down:
+            return  # already on the way out; do not interrupt the teardown again
+        shutting_down = True
+        terminate_browser_processes()
+        exit_when_browsers_gone(128 + signum, grace=SHUTDOWN_GRACE_SECONDS)
         raise KeyboardInterrupt
 
-    for signame in ("SIGTERM", "SIGHUP"):
+    for signame in ("SIGTERM", "SIGHUP", "SIGINT"):
         sig = getattr(signal, signame, None)
         if sig is None:
             continue
         try:
-            signal.signal(sig, _raise_keyboard_interrupt)
+            signal.signal(sig, _on_signal)
         except (ValueError, OSError):
             # Not in the main thread, or unsupported on this platform.
             pass

@@ -11,6 +11,7 @@ import signal
 from pathlib import Path
 from typing import Any
 
+from ._lifecycle import finish_even_if_cancelled
 from .fingerprint import FingerprintConfig
 from .local_proxy import LocalProxyRelay
 from .proxy import ProxyConfig
@@ -109,7 +110,24 @@ class MithwireBrowser:
         await self.close()
 
     async def start(self) -> None:
-        """Launch a fresh, owned browser process with engine-applied stealth."""
+        """Launch a fresh, owned browser process with engine-applied stealth.
+
+        All-or-nothing: either the browser is fully up on return, or nothing this
+        call created is left running -- not the browser, not the local proxy
+        relay -- whether the launch failed or the request was cancelled midway.
+        """
+        try:
+            await self._launch()
+        except BaseException:
+            # The engine already tears down a browser it could not bring up; this
+            # also covers a failure *after* ``uc.start`` returned (e.g. while
+            # installing the proxy-auth handler) and releases the relay.
+            await finish_even_if_cancelled(
+                self.close(), what="closing a browser whose launch did not complete"
+            )
+            raise
+
+    async def _launch(self) -> None:
         try:
             import mithwire as uc
             import mithwire.cdp.fetch as cdp_fetch
@@ -224,6 +242,9 @@ class MithwireBrowser:
 
     async def close(self) -> None:
         if self.browser is None:
+            # No browser yet (or any more) -- but a launch that died early may
+            # still have left its local proxy relay listening.
+            await self._close_relay()
             return
         browser = self.browser
         # We own this process, so tear it down deterministically here rather than
@@ -240,11 +261,15 @@ class MithwireBrowser:
             except Exception as exc:  # noqa: BLE001
                 logger.debug("browser.aclose() during teardown failed: %s", exc)
             await self._terminate_process(proc, pid)
-            if self._proxy_relay is not None:
-                try:
-                    await self._proxy_relay.close()
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("relay close during teardown failed: %s", exc)
+            # The process is gone; let the engine finish its own bookkeeping --
+            # delete the ephemeral profile it created, stand its exit guard down
+            # and forget the instance. Skipping this is what let temp profiles
+            # (hundreds of MB each) pile up until the whole server exited.
+            try:
+                await asyncio.wait_for(browser.astop(), timeout=5.0)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("engine cleanup during teardown failed: %s", exc)
+            await self._close_relay()
         finally:
             self.browser = None
             self.tab = None
@@ -277,6 +302,18 @@ class MithwireBrowser:
             self._proxy_fetch_enabled = False
             self._proxy_relay = None
             self.proxy_exit_info = None
+
+    async def _close_relay(self) -> None:
+        """Stop the local authenticating proxy relay, if one was started."""
+        relay = self._proxy_relay
+        if relay is None:
+            return
+        try:
+            await relay.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("relay close during teardown failed: %s", exc)
+        finally:
+            self._proxy_relay = None
 
     async def _ensure_proxy_auth_handler(self) -> None:
         """Answer proxy 407 challenges for authenticated HTTP(S) proxies.
